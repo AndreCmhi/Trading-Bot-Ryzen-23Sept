@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+.env.example
+*.log
+*.exe
+*.pid
+trades.json
+ai_decisions.json
+runtime_settings.json
+*.txt
+error_output.txt

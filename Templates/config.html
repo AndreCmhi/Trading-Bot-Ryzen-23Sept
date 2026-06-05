@@ -1,0 +1,564 @@
+﻿<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <title>Bot Config</title>
+  <style>
+    :root {
+      --bg: #050914;
+      --panel: #081126;
+      --panel2: #0c1a35;
+      --line: rgba(88, 166, 255, 0.18);
+      --text: #e7f2ff;
+      --muted: #7f94b8;
+      --cyan: #38d8ff;
+      --accent: #237bff;
+      --accent-dark: #1a5fcc;
+      --ok: #22c55e;
+      --danger: #ff5e7a;
+      --shadow: 0 8px 32px rgba(0,0,0,0.4);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: Arial, Helvetica, sans-serif;
+      background: linear-gradient(145deg, var(--bg) 0%, #061437 48%, #02050d 100%);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    header {
+      border-bottom: 1px solid var(--line);
+      background: rgba(8, 17, 38, 0.95);
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      backdrop-filter: blur(8px);
+    }
+
+    .bar {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 14px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+
+    h1 { margin: 0; font-size: 20px; font-weight: 700; color: var(--cyan); }
+
+    nav { display: flex; align-items: center; gap: 10px; }
+
+    a {
+      color: var(--cyan);
+      text-decoration: none;
+      font-weight: 600;
+      font-size: 14px;
+    }
+
+    a:hover { opacity: 0.8; }
+
+    main {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 24px 20px 80px;
+    }
+
+    form {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 16px;
+    }
+
+    section {
+      grid-column: span 6;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      box-shadow: var(--shadow);
+      padding: 20px;
+    }
+
+    section.wide { grid-column: 1 / -1; }
+    section.third { grid-column: span 4; }
+
+    h2 {
+      margin: 0 0 16px;
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--cyan);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 10px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .grid-3 {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    label {
+      display: grid;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    input, select {
+      width: 100%;
+      min-height: 38px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 8px 10px;
+      color: var(--text);
+      background: rgba(4, 10, 25, 0.6);
+      font-size: 13px;
+      transition: border-color 0.2s;
+    }
+
+    input:focus, select:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+
+    select option { background: #081126; }
+
+    input[type="checkbox"] {
+      width: 18px;
+      min-height: 18px;
+      accent-color: var(--cyan);
+      cursor: pointer;
+    }
+
+    .check {
+      grid-template-columns: 18px 1fr;
+      align-items: center;
+      color: var(--text);
+      font-size: 13px;
+      text-transform: none;
+      letter-spacing: 0;
+      cursor: pointer;
+    }
+
+    .actions {
+      grid-column: 1 / -1;
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 12px;
+      position: sticky;
+      bottom: 0;
+      padding: 14px 20px;
+      background: rgba(5, 9, 20, 0.92);
+      border-top: 1px solid var(--line);
+      backdrop-filter: blur(8px);
+      margin: 0 -20px;
+    }
+
+    button {
+      border: 0;
+      border-radius: 6px;
+      padding: 10px 20px;
+      cursor: pointer;
+      font-weight: 700;
+      font-size: 14px;
+      font-family: inherit;
+      transition: opacity 0.2s;
+    }
+
+    button:hover { opacity: 0.85; }
+
+    .primary {
+      background: linear-gradient(135deg, var(--accent), #20d8ff);
+      color: #03101d;
+    }
+
+    .secondary {
+      background: var(--panel2);
+      color: var(--text);
+      border: 1px solid var(--line);
+    }
+
+    .status {
+      margin-right: auto;
+      font-size: 13px;
+      color: var(--muted);
+      min-height: 20px;
+    }
+
+    .status.ok { color: var(--ok); }
+    .status.error { color: var(--danger); }
+    .view-switch { grid-column: 1 / -1; display:flex; gap:8px; align-items:center; }
+    .view-note { color: var(--muted); font-size:12px; }
+    .hidden-advanced { display:none !important; }
+
+    @media (max-width: 900px) {
+      section, section.third { grid-column: 1 / -1; }
+      .grid, .grid-3 { grid-template-columns: 1fr 1fr; }
+    }
+
+    @media (max-width: 560px) {
+      .grid, .grid-3 { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="bar">
+      <h1>⚙ Bot Config</h1>
+      <nav>
+        <a href="/">← Dashboard</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <form id="configForm">
+      <div class="view-switch">
+        <button class="secondary" type="button" id="basicViewBtn">Basic</button>
+        <button class="secondary" type="button" id="advancedViewBtn">Advanced</button>
+        <span class="view-note">Basic untuk setting harian. Advanced untuk guard/detail.</span>
+      </div>
+
+      <!-- STRATEGI -->
+      <section class="basic-field">
+        <h2>Strategi</h2>
+        <div class="grid">
+          <label>Mode Strategi
+            <select name="strategy_mode">
+              <option value="SCALPING">SCALPING</option>
+              <option value="BALANCED">BALANCED</option>
+              <option value="AGGRESSIVE">AGGRESSIVE</option>
+              <option value="PRECISION">PRECISION</option>
+              <option value="TARGET_75" selected>TARGET_75</option>
+            </select>
+          </label>
+          <label>Trading Style
+            <select name="trading_style">
+              <option value="AUTO" selected>AUTO</option>
+              <option value="SCALPING">SCALPING</option>
+              <option value="TREND_FOLLOWING">TREND FOLLOWING</option>
+              <option value="BREAKOUT">BREAKOUT</option>
+            </select>
+          </label>
+          <label>Min Score
+            <input name="min_score" type="number" min="1" max="15" step="1" value="10">
+          </label>
+          <label>Leverage Default
+            <input name="default_leverage" type="number" min="1" max="20" step="1" value="2">
+          </label>
+          <label>Margin Mode
+            <select name="preferred_margin_mode">
+              <option value="ISOLATED">ISOLATED</option>
+              <option value="CROSSED">CROSSED</option>
+            </select>
+          </label>
+          <label>Min Risk/Reward Ratio
+            <input name="min_risk_reward_ratio" type="number" min="1" max="10" step="0.1" value="2.5">
+          </label>
+          <label class="check">
+            <input name="ai_enabled" type="checkbox" checked>
+            Aktifkan AI (Groq AI Provider)
+          </label>
+        </div>
+      </section>
+
+      <!-- RISK SIZING -->
+      <section class="basic-field">
+        <h2>Risk Sizing</h2>
+        <div class="grid">
+          <label>Risk per Trade (%)
+            <input name="risk_per_trade_percent" type="number" min="0.1" max="2" step="0.1" value="0.3">
+          </label>
+          <label>Max Risk per Trade (%)
+            <input name="max_risk_per_trade_percent" type="number" min="0.1" max="2" step="0.1" value="0.5">
+          </label>
+          <label>Fixed Trade Margin (USDT) [Konek ke Margin Aktif]
+            <input name="fixed_trade_notional_usdt" type="number" min="1" step="0.5">
+          </label>
+          <label>Min Trade Margin (USDT) [Konek ke Margin Aktif]
+            <input name="min_trade_notional_usdt" type="number" min="0" step="0.5">
+          </label>
+          <label>Min Transaksi
+            <input name="min_transaksi" type="number" min="1" step="1">
+          </label>
+          <label>Max Open Positions
+            <input name="max_open_positions" type="number" min="1" max="20" step="1" value="20">
+          </label>
+        </div>
+      </section>
+
+      <!-- AUTO CLOSE -->
+      <section class="basic-field">
+        <h2>Auto Close</h2>
+        <div class="grid">
+          <label class="check">
+            <input name="auto_close_enabled" type="checkbox" checked>
+            Auto Close Aktif
+          </label>
+          <label>Target ROI Auto Close (%)
+            <input name="auto_close_roi_percent" type="number" min="0.1" step="0.1" value="2.5">
+          </label>
+          <label>Hard Stop ROI (%) [harus negatif, contoh: -3.0]
+            <input name="hard_stop_roi_percent" type="number" max="-0.1" step="0.1" value="-2.0">
+          </label>
+        </div>
+      </section>
+
+      <!-- TRAILING STOP -->
+      <section class="basic-field">
+        <h2>Trailing Stop</h2>
+        <div class="grid">
+          <label class="check">
+            <input name="trailing_enabled" type="checkbox" checked>
+            Trailing Aktif
+          </label>
+          <label class="check">
+            <input name="fast_trailing_enabled" type="checkbox">
+            Fast Mode (0.1% trigger)
+          </label>
+          <label>Trigger ROI (%)
+            <input name="trailing_trigger_roi_percent" type="number" min="0.1" step="0.1" value="2.0">
+          </label>
+          <label>Callback/Floor (%)
+            <input name="trailing_callback_roi_percent" type="number" min="0.1" step="0.1" value="0.5">
+          </label>
+          <label>Fast Trigger ROI (%)
+            <input name="fast_trailing_trigger_roi_percent" type="number" min="0.01" step="0.01">
+          </label>
+          <label>Fast Callback (%)
+            <input name="fast_trailing_callback_roi_percent" type="number" min="0.01" step="0.01">
+          </label>
+        </div>
+      </section>
+
+      <!-- RISK GUARD -->
+      <section class="wide advanced-field">
+        <h2>Risk Guard</h2>
+        <div class="grid-3">
+          <label>Max Daily Loss (USDT)
+            <input name="max_daily_loss_usdt" type="number" min="0.01" step="0.01" value="200.0">
+          </label>
+          <label>Max Consecutive Losses
+            <input name="max_consecutive_losses" type="number" min="1" step="1" value="10">
+          </label>
+          <label>Max Trades per Hour
+            <input name="max_trades_per_hour" type="number" min="1" step="1" value="10">
+          </label>
+          <label>Max Losses per Hour
+            <input name="max_losses_per_hour" type="number" min="1" step="1" value="5">
+          </label>
+          <label>Hourly Loss Limit (USDT)
+            <input name="hourly_loss_limit_usdt" type="number" min="0.01" step="0.01" value="5.0">
+          </label>
+          <label>Loss Cooldown (menit)
+            <input name="loss_cooldown_minutes" type="number" min="0" step="1" value="5">
+          </label>
+          <label class="check">
+            <input name="auto_pause_on_guard_halt" type="checkbox" checked>
+            Pause Bot Saat Guard Halt
+          </label>
+          <label class="check">
+            <input name="auto_close_positions_on_guard_halt" type="checkbox">
+            Close Posisi Saat Guard Halt
+          </label>
+        </div>
+      </section>
+
+      <!-- SYMBOL GUARD -->
+      <section class="advanced-field">
+        <h2>Symbol Guard</h2>
+        <div class="grid">
+          <label>Max Trades / Symbol / Hari
+            <input name="max_symbol_trades_per_day" type="number" min="1" step="1">
+          </label>
+          <label>Max Loss / Symbol / Hari
+            <input name="max_symbol_losses_per_day" type="number" min="1" step="1">
+          </label>
+          <label>Max Loss Beruntun / Symbol
+            <input name="max_symbol_consecutive_losses" type="number" min="1" step="1">
+          </label>
+          <label>Symbol Loss Cooldown (menit)
+            <input name="symbol_loss_cooldown_minutes" type="number" min="0" step="1">
+          </label>
+          <label>Hard Stop Cooldown (menit)
+            <input name="hard_stop_symbol_cooldown_minutes" type="number" min="0" step="1">
+          </label>
+        </div>
+      </section>
+
+      <!-- AUTO BLACKLIST -->
+      <section class="advanced-field">
+        <h2>Auto Blacklist</h2>
+        <div class="grid">
+          <label class="check">
+            <input name="auto_blacklist_enabled" type="checkbox" checked>
+            Auto Blacklist Aktif
+          </label>
+          <label>Min Trades
+            <input name="auto_blacklist_min_trades" type="number" min="1" step="1">
+          </label>
+          <label>Min Loss Rate (0â€“1)
+            <input name="auto_blacklist_min_loss_rate" type="number" min="0" max="1" step="0.01">
+          </label>
+          <label>Max Total PNL (USDT)
+            <input name="auto_blacklist_max_total_pnl" type="number" step="0.01">
+          </label>
+          <label>Min Hard Stop Rate (0â€“1)
+            <input name="auto_blacklist_min_hard_stop_rate" type="number" min="0" max="1" step="0.01">
+          </label>
+          <label>Min Loss Beruntun
+            <input name="auto_blacklist_min_consecutive_losses" type="number" min="1" step="1">
+          </label>
+        </div>
+      </section>
+
+      <!-- FILTER TRADING -->
+      <section class="advanced-field">
+        <h2>Filter Trading</h2>
+        <div class="grid">
+          <label class="check">
+            <input name="disable_trend_filter" type="checkbox">
+            Nonaktifkan Filter Tren (Disable Trend Filter)
+          </label>
+          <label class="check">
+            <input name="disable_pullback_filter" type="checkbox">
+            Nonaktifkan Filter Pullback (Disable Pullback Filter)
+          </label>
+        </div>
+      </section>
+
+      <!-- ACTIONS -->
+      <div class="actions">
+        <div id="status" class="status"></div>
+        <button class="secondary" type="button" id="reloadBtn">↺ Reload</button>
+        <button class="primary" type="submit">💾 Simpan</button>
+      </div>
+
+    </form>
+  </main>
+
+  <script>
+    const form = document.getElementById("configForm");
+    const statusEl = document.getElementById("status");
+    const reloadBtn = document.getElementById("reloadBtn");
+    const basicViewBtn = document.getElementById("basicViewBtn");
+    const advancedViewBtn = document.getElementById("advancedViewBtn");
+    const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || "";
+
+    const checkboxFields = new Set([
+      "ai_enabled",
+      "auto_close_enabled",
+      "auto_blacklist_enabled",
+      "auto_pause_on_guard_halt",
+      "auto_close_positions_on_guard_halt",
+      "trailing_enabled",
+      "fast_trailing_enabled",
+      "disable_trend_filter",
+      "disable_pullback_filter",
+    ]);
+
+    function setStatus(msg, type = "") {
+      statusEl.textContent = msg;
+      statusEl.className = `status ${type}`;
+    }
+
+    function fillForm(settings) {
+      for (const el of form.elements) {
+        if (!el.name || !(el.name in settings)) continue;
+        if (el.type === "checkbox") {
+          el.checked = Boolean(settings[el.name]);
+        } else {
+          el.value = settings[el.name] ?? "";
+        }
+      }
+    }
+
+    function readForm() {
+      const payload = {};
+      for (const el of form.elements) {
+        if (!el.name) continue;
+        if (checkboxFields.has(el.name)) {
+          payload[el.name] = el.checked;
+        } else if (el.tagName === "SELECT") {
+          payload[el.name] = el.value;
+        } else {
+          payload[el.name] = el.value;
+        }
+      }
+      return payload;
+    }
+
+    function setView(mode = "basic") {
+      const adv = document.querySelectorAll('.advanced-field');
+      adv.forEach((el) => el.classList.toggle('hidden-advanced', mode !== 'advanced'));
+      basicViewBtn.classList.toggle('primary', mode === 'basic');
+      advancedViewBtn.classList.toggle('primary', mode === 'advanced');
+    }
+
+    async function loadSettings() {
+      setStatus("Memuat config...");
+      const res = await fetch("/api/settings", { headers: { Accept: "application/json" } });
+      if (!res.ok) throw new Error("Gagal memuat config dari server.");
+      const settings = await res.json();
+      fillForm(settings);
+      setStatus("Config berhasil dimuat.", "ok");
+    }
+
+    async function saveSettings(e) {
+      e.preventDefault();
+      setStatus("Menyimpan...");
+      const res = await fetch("/api/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json", "X-CSRF-Token": csrfToken },
+        body: JSON.stringify(readForm()),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.message || "Gagal menyimpan config.");
+      if (data.settings) fillForm(data.settings);
+      setStatus(data.message || "Config tersimpan.", "ok");
+    }
+
+    form.addEventListener("submit", (e) => {
+      saveSettings(e).catch((err) => setStatus(err.message, "error"));
+    });
+
+    reloadBtn.addEventListener("click", () => {
+      loadSettings().catch((err) => setStatus(err.message, "error"));
+    });
+
+    basicViewBtn.addEventListener("click", () => setView("basic"));
+    advancedViewBtn.addEventListener("click", () => setView("advanced"));
+
+    setView("basic");
+    loadSettings().catch((err) => setStatus(err.message, "error"));
+  </script>
+</body>
+</html>
+
+
+
+
+
+
+
+
+
+
+

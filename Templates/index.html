@@ -1,0 +1,743 @@
+﻿<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <title>Futures Bot Dashboard</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script>
+  <style>
+    :root {
+      --bg: #050914;
+      --bg-2: #071634;
+      --panel: #081126;
+      --panel-2: #0b1834;
+      --line: rgba(88, 166, 255, 0.22);
+      --line-strong: rgba(61, 214, 255, 0.45);
+      --text: #e7f2ff;
+      --muted: #7f94b8;
+      --cyan: #38d8ff;
+      --blue: #496dff;
+      --green: #31d39a;
+      --red: #ff5e7a;
+      --amber: #ffbc56;
+      --shadow: 0 20px 55px rgba(0,0,0,0.45);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: Arial, Helvetica, sans-serif;
+      background:
+        linear-gradient(132deg, rgba(56,216,255,0.16) 0 1px, transparent 1px 28%),
+        linear-gradient(26deg, transparent 0 62%, rgba(73,109,255,0.2) 62% 63%, transparent 63%),
+        linear-gradient(145deg, var(--bg) 0%, #061437 48%, #02050d 100%);
+      color: var(--text);
+      min-height: 100vh;
+    }
+    a, button, input { font: inherit; }
+    a { color: var(--cyan); font-weight: 700; text-decoration: none; }
+
+    /* HEADER */
+    header {
+      position: sticky; top: 0; z-index: 20;
+      background: rgba(4,8,20,0.94);
+      border-bottom: 1px solid var(--line);
+      backdrop-filter: blur(12px);
+      box-shadow: 0 4px 24px rgba(0,0,0,0.4);
+    }
+    .bar {
+      width: min(1280px, calc(100vw - 32px));
+      margin: 0 auto;
+      min-height: 62px;
+      display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    }
+    h1 { font-size: 18px; font-weight: 800; color: var(--cyan); letter-spacing: 0.02em; }
+    nav { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+    /* BUTTONS */
+    button {
+      border: 1px solid transparent; border-radius: 6px;
+      padding: 8px 14px; cursor: pointer; font-weight: 700; font-size: 13px;
+      transition: opacity 0.15s, transform 0.15s;
+    }
+    button:hover { opacity: 0.85; transform: translateY(-1px); }
+    .btn-primary { background: linear-gradient(135deg,#237bff,#20d8ff); color: #03101d; border-color: rgba(56,216,255,0.42); box-shadow: 0 0 16px rgba(56,216,255,0.22); }
+    .btn-danger  { background: rgba(255,94,122,0.14); color: #ffd6dd; border-color: rgba(255,94,122,0.48); }
+    .btn-muted   { background: rgba(118,137,177,0.13); color: var(--text); border-color: var(--line); }
+    .btn-sm      { padding: 5px 10px; font-size: 12px; }
+
+    /* MAIN */
+    main {
+      width: min(1280px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 20px 0 60px;
+      display: grid; gap: 14px;
+    }
+
+    /* CARDS GRID */
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0,1fr));
+      gap: 12px;
+    }
+    .cards.wide { grid-template-columns: repeat(4, minmax(0,1fr)); }
+    .card {
+      background: linear-gradient(180deg, rgba(13,29,63,0.96), rgba(5,10,24,0.96));
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px 16px;
+      position: relative; overflow: hidden;
+      box-shadow: var(--shadow);
+    }
+    .card::after {
+      content: "";
+      position: absolute; left: 0; right: 0; bottom: 0; height: 2px;
+      background: linear-gradient(90deg, var(--cyan), var(--blue), var(--amber));
+      opacity: 0.6;
+    }
+    .card .lbl { color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; }
+    .card .val { font-size: 22px; font-weight: 800; color: var(--text); margin-top: 5px; }
+    .card .sub { font-size: 11px; color: var(--muted); margin-top: 3px; }
+
+    /* SECTION */
+    section {
+      background: linear-gradient(180deg, rgba(13,29,63,0.96), rgba(5,10,24,0.96));
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+      box-shadow: var(--shadow);
+    }
+    .sec-head {
+      display: flex; align-items: center; justify-content: space-between; gap: 10px;
+      margin-bottom: 12px;
+    }
+    .sec-head h2 { font-size: 15px; font-weight: 700; color: var(--text); }
+    .sec-actions { display: flex; gap: 8px; align-items: center; }
+
+    /* PILL */
+    .pill {
+      display: inline-flex; align-items: center;
+      padding: 3px 10px; border-radius: 999px;
+      background: rgba(56,216,255,0.08);
+      border: 1px solid var(--line-strong);
+      color: #b9ecff; font-size: 11px; font-weight: 700;
+    }
+    .pill.ok { background: rgba(49,211,154,0.12); border-color: rgba(49,211,154,0.4); color: var(--green); }
+    .pill.bad { background: rgba(255,94,122,0.12); border-color: rgba(255,94,122,0.4); color: var(--red); }
+
+    /* TABLE */
+    .scroll { overflow-x: auto; }
+    .scroll::-webkit-scrollbar { height: 6px; }
+    .scroll::-webkit-scrollbar-thumb { background: rgba(56,216,255,0.25); border-radius: 999px; }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    th, td { padding: 9px 8px; border-bottom: 1px solid rgba(88,166,255,0.1); text-align: left; vertical-align: middle; white-space: nowrap; }
+    th { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+    tbody tr:hover { background: rgba(56,216,255,0.05); }
+    .empty { color: var(--muted); font-size: 13px; padding: 12px 0; }
+
+    /* COLORS */
+    .ok   { color: var(--green); }
+    .bad  { color: var(--red); }
+    .warn { color: var(--amber); }
+    .buy  { color: var(--green); font-weight: 800; }
+    .sell { color: var(--red); font-weight: 800; }
+    .dbg-est { color: var(--muted); }
+    .dbg-exch { color: var(--green); }
+    .dbg-manual { color: var(--amber); }
+    .dbg-calc { color: var(--muted); }
+    .pos-legend { margin: 4px 0 10px 0; font-size: 11px; line-height: 1.5; color: var(--muted); }
+
+    /* LOG */
+    .log { display: grid; gap: 8px; max-height: 320px; overflow-y: auto; font-size: 13px; }
+    .log::-webkit-scrollbar { width: 6px; }
+    .log::-webkit-scrollbar-thumb { background: rgba(56,216,255,0.25); border-radius: 999px; }
+    .log-item {
+      padding: 9px 12px; border: 1px solid rgba(88,166,255,0.14);
+      border-radius: 6px; background: rgba(4,10,25,0.7); line-height: 1.5;
+    }
+    .log-item strong { color: #fff; }
+
+    /* TWO COLUMNS */
+    .two { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+
+    /* STATUS BAR */
+    #statusBar {
+      display: none;
+      padding: 8px 16px; border-radius: 6px; font-size: 13px; font-weight: 700;
+      background: rgba(255,94,122,0.14); border: 1px solid rgba(255,94,122,0.4); color: var(--red);
+    }
+
+    /* REGIME BADGE */
+    #regimeBadge { font-size: 12px; font-weight: 700; padding: 3px 10px; border-radius: 999px; }
+
+    @media (max-width: 1000px) { .cards, .cards.wide { grid-template-columns: repeat(2, 1fr); } }
+    @media (max-width: 700px)  {
+      .cards, .cards.wide, .two { grid-template-columns: 1fr; }
+      .bar { flex-direction: column; align-items: flex-start; padding: 12px 0; }
+      .pos-legend { font-size: 10px; line-height: 1.4; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="bar">
+    <h1>⚡ Futures Bot Dashboard</h1>
+    <nav>
+      <span id="ollamaBadge" class="pill bad">AI: Offline</span>
+      <span id="regimeBadge" class="pill">Market: -</span>
+      <a href="/config">Config</a>
+      <form method="post" action="/logout" style="display:inline">
+        <button class="btn-muted" type="submit">Logout</button>
+      </form>
+      <button id="toggleBot" class="btn-primary" type="button">Start</button>
+      <button id="closeAll"  class="btn-danger"  type="button">Close All</button>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+  <!-- STATUS ERROR BAR -->
+  <div id="statusBar"></div>
+
+  <!-- STATS UTAMA -->
+  <div class="cards">
+    <div class="card">
+      <div class="lbl">Bot</div>
+      <div id="botState" class="val">Memuat...</div>
+      <div id="botStopReason" class="sub"></div>
+    </div>
+    <div class="card">
+      <div class="lbl">Open Positions</div>
+      <div id="openCount" class="val">0</div>
+      <div id="openProfitLoss" class="sub">-</div>
+    </div>
+    <div class="card">
+      <div class="lbl">Total PNL Hari Ini</div>
+      <div id="totalPnl" class="val">0.00</div>
+      <div id="totalTradesInfo" class="sub">-</div>
+    </div>
+    <div class="card">
+      <div class="lbl">Win Rate</div>
+      <div id="winRate" class="val">0%</div>
+      <div id="winLossCount" class="sub">-</div>
+    </div>
+    <div class="card">
+      <div class="lbl">AI Provider</div>
+      <div id="aiProvider" class="val">-</div>
+      <div id="aiProviderNote" class="sub">-</div>
+    </div>
+    <div class="card">
+      <div class="lbl">Margin Aktif</div>
+      <div id="openMargin" class="val">0.00</div>
+      <div id="openMarginNote" class="sub">-</div>
+    </div>
+    <div class="card">
+      <div class="lbl">Loss Beruntun</div>
+      <div id="consecutiveLosses" class="val">0</div>
+      <div id="autoCloseNote" class="sub">-</div>
+    </div>
+    <div class="card">
+      <div class="lbl">Trade Hari Ini</div>
+      <div id="tradesToday" class="val">0</div>
+      <div id="tradesTodayNote" class="sub">-</div>
+    </div>
+  </div>
+
+  <!-- RINGKASAN HARIAN -->
+  <section>
+    <div class="sec-head">
+      <h2>Ringkasan Laba Rugi Harian</h2>
+      <span id="dailyDate" class="pill">-</span>
+    </div>
+    <div class="cards wide">
+      <div class="card">
+        <div class="lbl">PNL Bersih</div>
+        <div id="dailyNetPnl" class="val">0.00</div>
+      </div>
+      <div class="card">
+        <div class="lbl">Profit Kotor</div>
+        <div id="dailyGrossProfit" class="val ok">0.00</div>
+      </div>
+      <div class="card">
+        <div class="lbl">Loss Kotor</div>
+        <div id="dailyGrossLoss" class="val bad">0.00</div>
+      </div>
+      <div class="card">
+        <div class="lbl">Menang / Kalah / BE</div>
+        <div id="dailyWinLoss" class="val">0 / 0 / 0</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- POSISI AKTIF -->
+  <section>
+    <div class="sec-head">
+      <h2>Posisi Aktif</h2>
+      <div class="sec-actions">
+        <span id="lastUpdate" class="pill">-</span>
+        <button id="reloadPositions" class="btn-muted btn-sm" type="button">↺ Refresh</button>
+      </div>
+    </div>
+    <div class="sub pos-legend">
+      <span class="dbg-exch">Exch</span> = data exchange ·
+      <span class="dbg-calc">Calc</span> = rumus bot ·
+      <span class="dbg-manual">Manual</span> = override manual ·
+      <span class="dbg-calc">Fallback</span> = cadangan saat data exchange kosong
+    </div>
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr>
+            <th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>Mark</th>
+            <th>Margin</th><th>Margin Bal</th><th>PNL</th><th>ROI</th><th>TP</th><th>SL</th>
+            <th>State</th><th>Aksi</th>
+          </tr>
+        </thead>
+        <tbody id="positionsBody">
+          <tr><td colspan="13" class="empty">Tidak ada posisi.</td></tr>
+        </tbody>
+        <tfoot id="positionsFoot" style="display:none">
+          <tr style="border-top:1px solid rgba(88,166,255,0.25);font-weight:700">
+            <td colspan="5" style="color:var(--muted);font-size:12px">TOTAL</td>
+            <td id="totMargin"></td>
+            <td id="totMarginBal"></td>
+            <td id="totPnl"></td>
+            <td id="totRoi"></td>
+            <td colspan="4"></td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  </section>
+
+  <!-- TRADE TERAKHIR + AI LOG -->
+  <div class="two">
+    <section>
+      <div class="sec-head">
+        <h2>Trade Terakhir</h2>
+        <button id="reloadTrades" class="btn-muted btn-sm" type="button">↺ Reload</button>
+      </div>
+      <div class="scroll">
+        <table>
+          <thead>
+            <tr><th>Waktu</th><th>Symbol</th><th>Side</th><th>Harga</th><th>PNL</th><th>Status</th><th>Alasan</th></tr>
+          </thead>
+          <tbody id="tradesBody">
+            <tr><td colspan="7" class="empty">Belum ada data.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section>
+      <div class="sec-head">
+        <h2>AI & Guard</h2>
+        <button id="reloadAi" class="btn-muted btn-sm" type="button">↺ Reload</button>
+      </div>
+      <div id="aiLog" class="log">
+        <div class="empty">Belum ada keputusan.</div>
+      </div>
+    </section>
+  </div>
+
+  <!-- HISTORY MONITOR -->
+  <section>
+    <div class="sec-head">
+      <h2>History Monitor</h2>
+      <span id="monitorTime" class="pill">-</span>
+    </div>
+    <div id="monitorLog" class="log">
+      <div class="empty">Memuat...</div>
+    </div>
+  </section>
+
+</main>
+
+<script>
+  // ─── FORMAT ─────────────────────────────────────────────
+  const fmt   = new Intl.NumberFormat("en-US", { maximumFractionDigits: 4 });
+  const money = new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  let botRunning = false;
+
+  function fmtMoneySmart(v) {
+    const n = Number(v ?? 0);
+    const abs = Math.abs(n);
+    if (abs > 0 && abs < 0.01) return `${n < 0 ? '-' : ''}<0.01`;
+    return money.format(n);
+  }
+
+  function byId(id) { return document.getElementById(id); }
+  function clsNum(v) { return Number(v) >= 0 ? "ok" : "bad"; }
+  function sideClass(s) {
+    const v = String(s || "").toUpperCase();
+    return v === "BUY" || v === "LONG" ? "buy" : v === "SELL" || v === "SHORT" ? "sell" : "";
+  }
+  function showError(msg) {
+    const bar = byId("statusBar");
+    bar.textContent = msg;
+    bar.style.display = msg ? "block" : "none";
+  }
+
+  // ─── API HELPER ──────────────────────────────────────────
+  async function api(path, options = {}) {
+    const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || "";
+    const res = await fetch(path, {
+      headers: { "Content-Type": "application/json", "Accept": "application/json", "X-CSRF-Token": csrfToken },
+      ...options
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.message || `Gagal: ${path}`);
+    return data;
+  }
+
+  // ─── BOT STATUS ──────────────────────────────────────────
+  function setBotStatus(payload) {
+    botRunning = payload.running === true || payload.bot_running === true || payload.label === "RUNNING";
+    byId("botState").textContent = botRunning ? "RUNNING" : "STOPPED";
+    byId("botState").className = `val ${botRunning ? "ok" : "bad"}`;
+    byId("toggleBot").textContent = botRunning ? "Stop" : "Start";
+    byId("toggleBot").className = botRunning ? "btn-danger" : "btn-primary";
+    byId("botStopReason").textContent = payload.stop_reason || payload.reason || "";
+  }
+
+  // ─── STATS ───────────────────────────────────────────────
+  function setStats(s = {}) {
+    // PNL & winrate
+    const pnl = s.total_pnl ?? s.pnl ?? 0;
+    byId("totalPnl").textContent = fmtMoneySmart(Number(pnl));
+    byId("totalPnl").className = `val ${clsNum(pnl)}`;
+    const wr = s.winrate ?? s.win_rate ?? 0;
+    byId("winRate").textContent = `${money.format(Number(wr))}%`;
+
+    // Open positions info
+    byId("openCount").textContent = s.open_trades ?? s.open_positions ?? s.open_count ?? 0;
+    byId("openProfitLoss").textContent = `▲ ${s.open_profit_trades ?? 0} profit · ▼ ${s.open_loss_trades ?? 0} loss`;
+
+    // Win/loss count
+    byId("winLossCount").textContent = `${s.winning_trades_today ?? 0}W / ${s.losing_trades_today ?? 0}L / ${s.breakeven_trades_today ?? 0}BE`;
+
+    // Trade count
+    byId("tradesToday").textContent = s.total_trades_today ?? 0;
+    byId("tradesTodayNote").textContent = `Total semua: ${s.total_trades_all ?? 0}`;
+
+    // Consecutive losses
+    const cl = s.consecutive_losses ?? 0;
+    byId("consecutiveLosses").textContent = cl;
+    byId("consecutiveLosses").className = `val ${cl >= 3 ? "bad" : cl >= 2 ? "warn" : "ok"}`;
+    byId("autoCloseNote").textContent = s.auto_close ? `Auto close: ${money.format(s.auto_close_roi_percent ?? 0)}%` : "Auto close: OFF";
+
+    // Total info
+    byId("totalTradesInfo").textContent = `Profit: ${fmtMoneySmart(s.winning_pnl_today ?? 0)} · Loss: ${fmtMoneySmart(s.losing_pnl_today ?? 0)}`;
+
+    // Margin (dari stats jika ada)
+    if (s.total_open_margin !== undefined) {
+      const marginBalance = Number(s.margin_balance ?? 0);
+      const limit10Percent = marginBalance * 0.10;
+      byId("openMargin").textContent = `${fmtMoneySmart(Number(s.total_open_margin ?? 0))} / ${fmtMoneySmart(limit10Percent)}`;
+      byId("openMarginNote").textContent = `Batas: 10% dari Margin Balance (${fmtMoneySmart(marginBalance)} USDT)`;
+    }
+
+    // Daily summary
+    const daily = s.daily_pnl_summary || {};
+    if (daily.date) {
+      byId("dailyDate").textContent = daily.date;
+      const net = Number(daily.net_pnl ?? pnl);
+      byId("dailyNetPnl").textContent = fmtMoneySmart(net);
+      byId("dailyNetPnl").className = `val ${clsNum(net)}`;
+      byId("dailyGrossProfit").textContent = fmtMoneySmart(Number(daily.gross_profit ?? s.winning_pnl_today ?? 0));
+      byId("dailyGrossLoss").textContent = fmtMoneySmart(Number(daily.gross_loss ?? s.losing_pnl_today ?? 0));
+      byId("dailyWinLoss").textContent = `${daily.wins ?? s.winning_trades_today ?? 0} / ${daily.losses ?? s.losing_trades_today ?? 0} / ${daily.breakeven ?? s.breakeven_trades_today ?? 0}`;
+    } else {
+      // fallback dari data stats langsung
+      const net = Number(pnl);
+      byId("dailyNetPnl").textContent = fmtMoneySmart(net);
+      byId("dailyNetPnl").className = `val ${clsNum(net)}`;
+      byId("dailyGrossProfit").textContent = fmtMoneySmart(Number(s.winning_pnl_today ?? 0));
+      byId("dailyGrossLoss").textContent = fmtMoneySmart(Number(s.losing_pnl_today ?? 0));
+      byId("dailyWinLoss").textContent = `${s.winning_trades_today ?? 0} / ${s.losing_trades_today ?? 0} / ${s.breakeven_trades_today ?? 0}`;
+      byId("dailyDate").textContent = new Date().toLocaleDateString("id-ID");
+    }
+  }
+
+  // ─── AI STATUS ───────────────────────────────────────────
+  function setAiStatus(s = {}) {
+    const provider = s.enabled ? (s.provider || "-") : "Disabled";
+    byId("aiProvider").textContent = provider;
+    const isFallback = !s.enabled || String(s.provider || "").includes("fallback") || String(s.provider || "").includes("heuristic");
+    byId("aiProvider").className = `val ${isFallback ? "bad" : "ok"}`;
+    byId("aiProviderNote").textContent = `mode ${s.strategy_mode || "-"} | min conf ${money.format(Number(s.effective_ai_min_confidence ?? s.min_confidence ?? 0))}`;
+
+    const oBadge = byId("ollamaBadge");
+    if (oBadge) {
+      if (!s.enabled) {
+        oBadge.textContent = "AI: Disabled";
+        oBadge.className = "pill bad";
+      } else if (isFallback) {
+        oBadge.textContent = "AI: Heuristic Fallback";
+        oBadge.className = "pill bad";
+      } else if (s.provider === "groq") {
+        oBadge.textContent = `AI: Active (${s.groq_model || "Groq"})`;
+        oBadge.className = "pill ok";
+      } else {
+        oBadge.textContent = `AI: Active (${s.ollama_model || "Ollama"})`;
+        oBadge.className = "pill ok";
+      }
+    }
+
+    const regime = s.market_regime || "";
+    const badge = byId("regimeBadge");
+    badge.textContent = `Market: ${regime || "?"}`;
+    badge.className = "pill" + (regime === "ACTIVE" ? " ok" : regime === "SLUGGISH" ? " bad" : "");
+  }
+
+  // ─── POSITIONS ───────────────────────────────────────────
+  function renderPositions(rows = []) {
+    const body = byId("positionsBody");
+    const foot = byId("positionsFoot");
+    byId("openCount").textContent = rows.length;
+    if (!rows.length) {
+      body.innerHTML = `<tr><td colspan="13" class="empty">Tidak ada posisi aktif.</td></tr>`;
+      if (foot) foot.style.display = "none";
+      return;
+    }
+    let totalMargin = 0;
+    let totalMarginBal = 0;
+    let totalPnl = 0;
+    body.innerHTML = rows.map(p => {
+      const entry    = Number(p.entryPrice ?? p.entry_price ?? 0);
+      const mark     = Number(p.markPrice ?? p.mark_price ?? 0);
+      const margin   = Number(p.margin ?? p.position_margin ?? 0);
+      const pnl      = Number(p.pnl ?? 0);
+      const roi      = Number(p.roi ?? p.roi_percent ?? 0);
+      const estimatedMargin = Number(p.estimated_margin ?? 0);
+      const calculatedRoi = Number(p.calculated_roi ?? roi);
+      const manualRoi = p.manual_roi;
+      const tp       = p.manual_tp ?? p.tp_price ?? 0;
+      const sl       = p.manual_sl ?? p.sl_price ?? 0;
+      const state    = p.management_state || "-";
+      const marginBal = Number(p.margin_balance ?? (margin + pnl));
+      const marginSource = String(p.margin_source || 'fallback') === 'exchange' ? 'Exch' : 'Fallback';
+      const marginBalSource = String(p.margin_balance_source || 'fallback') === 'exchange' ? 'Exch' : 'Fallback';
+      const marginDebug = estimatedMargin > 0 ? `<span class="dbg-est">Est ${estimatedMargin.toFixed(8)}</span>` : "";
+      const roiSource = String(p.roi_source || '').toLowerCase();
+      const roiDebug = roiSource === 'manual'
+        ? `<span class="dbg-manual">Manual ${money.format(Number(manualRoi ?? roi))}%</span>`
+        : roiSource === 'exchange'
+          ? `<span class="dbg-exch">Exch ${money.format(roi)}%</span>`
+          : `<span class="dbg-calc">Calc ${money.format(calculatedRoi)}%</span>`;
+      totalMargin += margin;
+      totalMarginBal += marginBal;
+      totalPnl += pnl;
+      return `<tr>
+        <td>
+          <strong>${p.symbol || "-"}</strong>
+          <span class="sub" style="display:block;margin-top:2px;font-size:10px">${p.leverage ? p.leverage + 'x' : ''} [${p.preferred_margin_mode || 'ISOLATED'}]</span>
+        </td>
+        <td class="${sideClass(p.side)}">${p.side || "-"}</td>
+        <td>${fmt.format(Number(p.qty ?? p.amount ?? 0))}</td>
+        <td>${fmt.format(entry)}</td>
+        <td>${mark ? fmt.format(mark) : "<span class='warn'>-</span>"}</td>
+        <td>${fmtMoneySmart(margin)}<span class="sub ${marginSource === 'Exch' ? 'dbg-exch' : 'dbg-calc'}" style="display:block;margin-top:2px;font-size:10px">${marginSource}</span>${marginDebug ? `<span class="sub" style="display:block;margin-top:2px;font-size:10px">${marginDebug}</span>` : ""}</td>
+        <td>${fmtMoneySmart(marginBal)}<span class="sub ${marginBalSource === 'Exch' ? 'dbg-exch' : 'dbg-calc'}" style="display:block;margin-top:2px;font-size:10px">${marginBalSource}</span></td>
+        <td class="${clsNum(pnl)}">${fmtMoneySmart(pnl)}</td>
+        <td class="${clsNum(roi)}">${money.format(roi)}%<span class="sub" style="display:block;margin-top:2px;font-size:10px">${roiDebug}</span></td>
+        <td class="${tp ? "ok" : "warn"}">${tp ? fmt.format(Number(tp)) : "-"}</td>
+        <td class="${sl ? "bad" : "warn"}">${sl ? fmt.format(Number(sl)) : "-"}</td>
+        <td><span class="pill">${state}</span></td>
+        <td><button class="btn-danger btn-sm" data-close="${p.symbol}" type="button">Close</button></td>
+      </tr>`;
+    }).join("");
+    if (foot) {
+      foot.style.display = "";
+      const totalRoi = totalMargin > 0 ? (totalPnl / totalMargin) * 100 : 0;
+      byId("totMargin").textContent = fmtMoneySmart(totalMargin);
+      byId("totMarginBal").textContent = fmtMoneySmart(totalMarginBal);
+      byId("totPnl").textContent = fmtMoneySmart(totalPnl);
+      byId("totPnl").className = clsNum(totalPnl);
+      byId("totRoi").textContent = `${money.format(totalRoi)}%`;
+      byId("totRoi").className = clsNum(totalRoi);
+    }
+  }
+
+  // ─── TRADES ──────────────────────────────────────────────
+  function renderTrades(rows = []) {
+    const body = byId("tradesBody");
+    const list = Array.isArray(rows) ? rows : [];
+    if (!list.length) {
+      body.innerHTML = `<tr><td colspan="7" class="empty">Belum ada data.</td></tr>`;
+      return;
+    }
+    body.innerHTML = list.slice().reverse().slice(0, 8).map(t => {
+      const pnl = Number(t.pnl ?? 0);
+      return `<tr>
+        <td>${t.closed_time || t.time || "-"}</td>
+        <td><strong>${t.symbol || "-"}</strong></td>
+        <td class="${sideClass(t.side)}">${t.side || "-"}</td>
+        <td>${fmt.format(Number(t.close_price ?? t.price ?? t.entry_price ?? 0))}</td>
+        <td class="${clsNum(pnl)}">${fmtMoneySmart(pnl)}</td>
+        <td>${t.status || "-"}</td>
+        <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis">${t.close_reason || t.strategy_reason || "-"}</td>
+      </tr>`;
+    }).join("");
+  }
+
+  // ─── AI DECISIONS ────────────────────────────────────────
+  function renderAi(rows = []) {
+    const log = byId("aiLog");
+    if (!rows.length) {
+      log.innerHTML = `<div class="empty">Belum ada keputusan AI.</div>`;
+      return;
+    }
+    log.innerHTML = rows.slice(0, 20).map(d => {
+      const conf = Number(d.confidence ?? 0);
+      const cls  = d.action === "BUY" ? "ok" : d.action === "SELL" ? "bad" : "";
+      return `<div class="log-item">
+        <strong>${d.symbol || "-"}</strong>
+        <span class="${cls}">${d.action || "-"}</span>
+        · conf <strong>${money.format(conf)}</strong>
+        · score ${d.score ?? "-"}
+        <br><span style="color:var(--muted);font-size:12px">${d.reason || d.mode || "-"}</span>
+      </div>`;
+    }).join("");
+  }
+
+  // ─── HISTORY MONITOR ─────────────────────────────────────
+  function renderMonitor(data = {}) {
+    byId("monitorTime").textContent = data.updated_at || "-";
+    const items = data.recommendations || [];
+    const best  = data.best_symbols || [];
+    const worst = data.worst_symbols || [];
+
+    let html = "";
+
+    if (items.length) {
+      html += items.map(item =>
+        `<div class="log-item">
+          <strong>${item.title || item.type || "Info"}</strong>
+          <br>${item.message || item.reason || JSON.stringify(item)}
+        </div>`
+      ).join("");
+    }
+
+    if (best.length || worst.length) {
+      html += `<div class="log-item">
+        <strong>Best:</strong> ${best.slice(0,5).map(s => `<span class="ok">${s.label||s.key||s}</span>`).join(" · ") || "-"}
+        &nbsp;|&nbsp;
+        <strong>Worst:</strong> ${worst.slice(0,5).map(s => `<span class="bad">${s.label||s.key||s}</span>`).join(" · ") || "-"}
+      </div>`;
+    }
+
+    if (data.recent_winrate !== undefined) {
+      html += `<div class="log-item">
+        <strong>Winrate Recent:</strong> <span class="${clsNum(data.recent_winrate - 50)}">${money.format(data.recent_winrate)}%</span>
+        &nbsp;·&nbsp;
+        <strong>PNL Recent:</strong> <span class="${clsNum(data.recent_pnl)}">${money.format(data.recent_pnl)}</span>
+        &nbsp;·&nbsp;
+        <strong>Hard Stop Rate:</strong> ${money.format(data.recent_hard_stop_rate * 100)}%
+      </div>`;
+    }
+
+    byId("monitorLog").innerHTML = html || `<div class="empty">Tidak ada data monitor.</div>`;
+  }
+
+  // ─── RELOAD ALL ──────────────────────────────────────────
+  async function reloadAll() {
+    const safe = (p) => p.then(v => ({ ok: true, v })).catch(e => ({ ok: false, e }));
+    const [bot, stats, positions, trades, ai, monitor, aiStatus] = await Promise.all([
+      safe(api("/api/bot_status")),
+      safe(api("/api/stats")),
+      safe(api("/api/positions")),
+      safe(api("/api/status")),
+      safe(api("/api/ai_decisions")),
+      safe(api("/api/history_monitor")),
+      safe(api("/api/ai_status")),
+    ]);
+    if (bot.ok)      setBotStatus(bot.v);
+    if (stats.ok)    setStats(stats.v);
+    if (aiStatus.ok) setAiStatus(aiStatus.v);
+    if (positions.ok) renderPositions(positions.v);
+    if (trades.ok)   renderTrades(trades.v);
+    if (ai.ok)       renderAi(Array.isArray(ai.v) ? ai.v : []);
+    if (monitor.ok)  renderMonitor(monitor.v);
+    byId("lastUpdate").textContent = new Date().toLocaleTimeString("id-ID", { hour12: false });
+    const errs = [bot,stats,positions,trades,ai,monitor,aiStatus].filter(r=>!r.ok).map(r=>r.e?.message);
+    if (errs.length) console.warn("reloadAll partial errors:", errs);
+  }
+
+  // ─── EVENTS ──────────────────────────────────────────────
+  byId("toggleBot").addEventListener("click", async () => {
+    try {
+      const data = await api("/api/toggle_bot", { method: "POST", body: JSON.stringify({ running: !botRunning }) });
+      setBotStatus(data.bot_status || data);
+    } catch (err) { showError(err.message); }
+  });
+
+  byId("closeAll").addEventListener("click", async () => {
+    if (!confirm("Tutup semua posisi aktif? Pastikan kamu yakin!")) return;
+    try {
+      const data = await api("/api/close_all_positions", { method: "POST", body: "{}" });
+      showError("");
+      alert(data.message || "Semua posisi ditutup.");
+      await reloadAll();
+    } catch (err) { showError(err.message); }
+  });
+
+  byId("reloadPositions").addEventListener("click", async () => {
+    try { renderPositions(await api("/api/positions")); } catch (err) { showError(err.message); }
+  });
+
+  byId("reloadTrades").addEventListener("click", async () => {
+    try { renderTrades(await api("/api/status")); } catch (err) { showError(err.message); }
+  });
+
+  byId("reloadAi").addEventListener("click", async () => {
+    try { renderAi(await api("/api/ai_decisions")); } catch (err) { showError(err.message); }
+  });
+
+  byId("positionsBody").addEventListener("click", async (e) => {
+    const symbol = e.target.dataset.close;
+    if (!symbol) return;
+    if (!confirm(`Tutup posisi ${symbol}?`)) return;
+    try {
+      await api("/api/close_position", { method: "POST", body: JSON.stringify({ symbol }) });
+      await reloadAll();
+    } catch (err) { showError(err.message); }
+  });
+
+  // ─── SOCKET.IO REALTIME ──────────────────────────────────
+  try {
+    const socket = io({ transports: ["websocket", "polling"] });
+
+    socket.on("connect", () => console.log("Socket connected"));
+    socket.on("disconnect", () => console.log("Socket disconnected"));
+
+    socket.on("bot_status", setBotStatus);
+
+    socket.on("update_dashboard", (payload) => {
+      if (payload.open_positions) renderPositions(payload.open_positions);
+      if (payload.stats) setStats(payload.stats);
+      byId("lastUpdate").textContent = payload.time || new Date().toLocaleTimeString("id-ID", { hour12: false });
+    });
+
+    socket.on("update_stats", setStats);
+
+    socket.on("ai_status", (payload) => {
+      setAiStatus(payload);
+      if (payload.recent_decisions) renderAi(payload.recent_decisions);
+    });
+
+    socket.on("history_monitor", renderMonitor);
+    socket.on("new_trade",        () => reloadAll());
+    socket.on("position_closed",  () => reloadAll());
+
+  } catch (e) {
+    console.warn("Socket.IO tidak tersedia:", e.message);
+  }
+
+  // ─── INIT ─────────────────────────────────────────────────
+  reloadAll();
+  setInterval(() => reloadAll().catch(() => {}), 10000);
+</script>
+</body>
+</html>
