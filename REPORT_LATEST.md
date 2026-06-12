@@ -1,88 +1,77 @@
-# Trading Bot Report - 2026-06-03 11:42
+# Trading Bot Report - 2026-06-12 10:37
 
-**Generated**: 2026-06-03 11:42:47  
+**Generated**: 2026-06-12 10:37:15  
 **Bot Status**: RUNNING  
-**Uptime**: since 11:42
+**Uptime**: since 10:37
 
 ---
 ## Current Status
 
 | Metric | Value |
 | --- | --- |
-| Open Positions | 3 / 5 |
+| Open Positions | 6 / 30 |
 | Active Margin | 0.00 USDT |
-| Today PnL | 0.05 USDT |
-| Today Win Rate | 36.36% |
-| Today Trades | 11 |
-| Today Wins | 4 |
-| Today Losses | 1 |
-| Strategy Mode | BALANCED |
-| Min Score | 8 |
-| Leverage | 20 |
+| Today PnL | 0.00 USDT |
+| Today Win Rate | 0.00% |
+| Today Trades | 0 |
+| Today Wins | 0 |
+| Today Losses | 0 |
+| Strategy Mode | SCALPING |
+| Min Score | 4 |
+| Leverage | 3 |
 
 ## Overall Performance
 
 | Metric | Value |
 | --- | --- |
-| Total Closed Trades | 11 |
-| Open Trades | 3 |
-| Wins | 4 |
-| Losses | 1 |
-| Breakeven | 6 |
-| Win Rate | 36.36% |
-| Total PnL | 0.05 |
-| Profit Factor | 1.45 |
-| Avg Win | 0.0400 |
-| Avg Loss | -0.1100 |
+| Total Closed Trades | 0 |
+| Open Trades | 6 |
+| Wins | 0 |
+| Losses | 0 |
+| Breakeven | 0 |
+| Win Rate | 0.00% |
+| Total PnL | 0.00 |
+| Profit Factor | 0.00 |
+| Avg Win | 0.0000 |
+| Avg Loss | 0.0000 |
 
 ## Last 20 Trades
 
 | Metric | Value |
 | --- | --- |
-| Trades | 11 |
-| Win Rate | 36.36% |
-| Total PnL | 0.05 |
+| Trades | 0 |
+| Win Rate | 0.00% |
+| Total PnL | 0.00 |
 
 ## Top Symbols by PnL
 
 | Symbol | Trades | Win Rate | Total PnL | Avg PnL |
 | --- | --- | --- | --- | --- |
-| MITOUSDT | 2 | 100.00% | 0.09 | 0.0450 |
-| AKTUSDT | 1 | 100.00% | 0.06 | 0.0600 |
-| RIVERUSDT | 1 | 100.00% | 0.01 | 0.0100 |
-| GWEIUSDT | 3 | 0.00% | 0.00 | 0.0000 |
-| EULUSDT | 2 | 0.00% | 0.00 | 0.0000 |
-| PAXGUSDT | 1 | 0.00% | 0.00 | 0.0000 |
-| AUCTIONUSDT | 1 | 0.00% | -0.11 | -0.1100 |
+| - | 0 | 0% | 0 | 0 |
 
 ## Recent Closed Trades (Last 10)
 
-| Symbol | Side | PnL | Reason |
-| --- | --- | --- | --- |
-| MITOUSDT | SELL | 0.05 | SYNC_CLOSE |
-| MITOUSDT | SELL | 0.04 | BREAKEVEN_EXIT |
-| AUCTIONUSDT | SELL | -0.11 | SYNC_CLOSE |
-| GWEIUSDT | SELL | 0.00 | SYNC_CLOSE |
-| GWEIUSDT | SELL | 0.00 | PARTIAL_TP_FULL_CLOSE |
-| RIVERUSDT | SELL | 0.01 | BREAKEVEN_EXIT |
-| AKTUSDT | SELL | 0.06 | TRAILING_STOP |
-| EULUSDT | SELL | 0.00 | PARTIAL_TP_FULL_CLOSE |
-| PAXGUSDT | SELL | 0.00 | SYNC_CLOSE |
-| GWEIUSDT | SELL | 0.00 | SYNC_CLOSE |
+No trades yet.
+
 
 ## Configuration
 
 | Setting | Value |
 | --- | --- |
-| strategy_mode | BALANCED |
-| min_score | 8 |
-| default_leverage | 20 |
-| max_open_positions | 5 |
-| risk_per_trade_percent | 1.0 |
-| auto_close_roi_percent | 8.0 |
-| hard_stop_roi_percent | -3.0 |
+| strategy_mode | SCALPING |
+| min_score | 4 |
+| default_leverage | 3 |
+| max_open_positions | 30 |
+| risk_per_trade_percent | 0.8 |
+| auto_close_roi_percent | 3 |
+| hard_stop_roi_percent | -5 |
 | trailing_enabled | True |
 | trading_style | AUTO |
+
+## Indicator Summary
+| Type | Bucket | Trades | Win Rate | Total PnL | Avg PnL |
+| --- | --- | --- | --- | --- | --- |
+| volume | unknown | 0 | 0.00% | 0.00 | 0.0000 |
 
 ---
 

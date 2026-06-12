@@ -158,6 +158,27 @@
 
     /* TWO COLUMNS */
     .two { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .chart-shell {
+      display: grid;
+      gap: 10px;
+      padding: 12px;
+      border: 1px solid rgba(88,166,255,0.14);
+      border-radius: 10px;
+      background: linear-gradient(180deg, rgba(4,10,25,0.7), rgba(4,10,25,0.45));
+    }
+    .chart-legend { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+    .chart-chip {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 4px 10px; border-radius: 999px;
+      background: rgba(56,216,255,0.08);
+      border: 1px solid rgba(88,166,255,0.18);
+      color: var(--text); font-size: 11px; font-weight: 700;
+    }
+    .chart-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+    .chart-dot.vol { background: var(--cyan); }
+    .chart-dot.adx { background: var(--green); }
+    .chart-dot.score { background: var(--amber); }
+
 
     /* STATUS BAR */
     #statusBar {
@@ -340,6 +361,37 @@
       </div>
     </section>
   </div>
+
+  <section>
+    <div class="sec-head">
+      <h2>Konfirmasi Entry</h2>
+      <span id="signalStamp" class="pill">-</span>
+    </div>
+    <div class="cards wide" style="grid-template-columns: repeat(6, minmax(0,1fr));">
+      <div class="card"><div class="lbl">Volume Ratio</div><div id="sigVolume" class="val">-</div><div class="sub">Banding volume vs rata-rata</div></div>
+      <div class="card"><div class="lbl">VWAP Bias</div><div id="sigVwap" class="val">-</div><div class="sub">Price vs VWAP</div></div>
+      <div class="card"><div class="lbl">EMA 20/50</div><div id="sigEma" class="val">-</div><div class="sub">Trend bias</div></div>
+      <div class="card"><div class="lbl">ADX</div><div id="sigAdx" class="val">-</div><div class="sub">Strength trend</div></div>
+      <div class="card"><div class="lbl">RSI</div><div id="sigRsi" class="val">-</div><div class="sub">Momentum confirm</div></div>
+      <div class="card"><div class="lbl">Confirm Score</div><div id="sigScore" class="val">-</div><div class="sub">Total poin indikasi</div></div>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <h2>Indicator Chart</h2>
+      <span id="chartStamp" class="pill">-</span>
+    </div>
+    <div class="chart-shell">
+      <div class="view-note">Line chart keputusan AI terakhir. Volume ratio, ADX, confirm score.</div>
+      <div class="chart-legend">
+        <span class="chart-chip"><span class="chart-dot vol"></span>Volume Ratio</span>
+        <span class="chart-chip"><span class="chart-dot adx"></span>ADX</span>
+        <span class="chart-chip"><span class="chart-dot score"></span>Confirm Score</span>
+      </div>
+      <canvas id="indicatorChart" width="1200" height="220" style="width:100%;height:220px;display:block;border:1px solid rgba(88,166,255,0.14);border-radius:8px;background:rgba(4,10,25,0.55)"></canvas>
+    </div>
+  </section>
 
   <!-- HISTORY MONITOR -->
   <section>
@@ -582,26 +634,130 @@
     }).join("");
   }
 
-  // ─── AI DECISIONS ────────────────────────────────────────
-  function renderAi(rows = []) {
-    const log = byId("aiLog");
-    if (!rows.length) {
-      log.innerHTML = `<div class="empty">Belum ada keputusan AI.</div>`;
+  function drawIndicatorChart(rows = []) {
+    const canvas = byId("indicatorChart");
+    if (!canvas) return;
+    const list = (Array.isArray(rows) ? rows : []).slice(0, 12).reverse();
+    const ctx = canvas.getContext("2d");
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = canvas.clientWidth || 1200;
+    const cssH = canvas.clientHeight || 220;
+    canvas.width = Math.floor(cssW * dpr);
+    canvas.height = Math.floor(cssH * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, cssW, cssH);
+    ctx.fillStyle = "rgba(4,10,25,0.9)";
+    ctx.fillRect(0, 0, cssW, cssH);
+    ctx.strokeStyle = "rgba(88,166,255,0.18)";
+    ctx.lineWidth = 1;
+    for (let i = 0; i < 4; i++) {
+      const y = 30 + i * ((cssH - 70) / 3);
+      ctx.beginPath(); ctx.moveTo(40, y); ctx.lineTo(cssW - 16, y); ctx.stroke();
+    }
+    if (!list.length) {
+      ctx.fillStyle = "#7f94b8";
+      ctx.font = "600 14px Arial";
+      ctx.fillText("Belum ada data indikator", 24, 40);
+      byId("chartStamp").textContent = "-";
       return;
     }
-    log.innerHTML = rows.slice(0, 20).map(d => {
+    const series = {
+      vol: list.map(r => Number(r.volume_ratio ?? r.vol_ratio ?? 0)),
+      adx: list.map(r => Number(r.adx ?? 0)),
+      score: list.map(r => Number(r.confirmation_score ?? r.score ?? 0)),
+    };
+    const labels = list.map(r => String(r.symbol || "-") + " " + String(r.action || r.side || "-"));
+    const maxVol = Math.max(2, ...series.vol);
+    const maxAdx = Math.max(30, ...series.adx);
+    const maxScore = Math.max(10, ...series.score);
+    const marginX = 44;
+    const marginY = 24;
+    const plotW = cssW - marginX - 18;
+    const plotH = cssH - marginY - 38;
+    const step = list.length > 1 ? plotW / (list.length - 1) : plotW;
+    function mapY(v, max) {
+      return marginY + plotH - ((v / max) * plotH);
+    }
+    function drawLine(values, max, color, width) {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = width;
+      ctx.beginPath();
+      values.forEach((v, i) => {
+        const x = marginX + i * step;
+        const y = mapY(v, max);
+        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+    }
+    drawLine(series.vol, maxVol, "#38d8ff", 2.4);
+    drawLine(series.adx, maxAdx, "#31d39a", 2.2);
+    drawLine(series.score, maxScore, "#ffbc56", 2.2);
+    ctx.fillStyle = "#e7f2ff";
+    ctx.font = "600 11px Arial";
+    labels.forEach((label, i) => {
+      const x = marginX + i * step;
+      const y = cssH - 16;
+      if (i % 2 === 0 || list.length <= 6) ctx.fillText(label.slice(0, 10), x - 14, y);
+    });
+    ctx.fillStyle = "#38d8ff";
+    ctx.fillText("Volume Ratio", cssW - 220, 18);
+    ctx.fillStyle = "#31d39a";
+    ctx.fillText("ADX", cssW - 132, 18);
+    ctx.fillStyle = "#ffbc56";
+    ctx.fillText("Confirm Score", cssW - 82, 18);
+    const latest = list[list.length - 1] || {};
+    byId("chartStamp").textContent = latest.symbol ? latest.symbol + " · " + (latest.action || latest.side || "-") : "-";
+  }
+
+  function renderSignalSnapshot(latest = {}) {
+    const volume = Number(latest.volume_ratio ?? latest.vol_ratio ?? 0);
+    const vwap = Number(latest.vwap ?? 0);
+    const ema20 = Number(latest.ema20 ?? 0);
+    const ema50 = Number(latest.ema50 ?? 0);
+    const adx = Number(latest.adx ?? 0);
+    const rsi = Number(latest.rsi ?? 0);
+    const priceAboveVwap = Boolean(latest.price_above_vwap);
+    const priceAboveEma20 = Boolean(latest.price_above_ema20);
+    const priceAboveEma50 = Boolean(latest.price_above_ema50);
+    const biasText = priceAboveVwap ? "Bullish" : "Bearish";
+    byId("signalStamp").textContent = latest.symbol ? latest.symbol + " · " + (latest.action || latest.side || "-") : "-";
+    byId("sigVolume").textContent = volume > 0 ? fmtMoneySmart(volume) + "x" : "-";
+    byId("sigVwap").textContent = vwap ? biasText : "-";
+    byId("sigEma").textContent = ema20 && ema50 ? (priceAboveEma20 && priceAboveEma50 ? "Bullish" : (!priceAboveEma20 && !priceAboveEma50 ? "Bearish" : "Mixed")) : "-";
+    byId("sigAdx").textContent = adx ? money.format(adx) : "-";
+    byId("sigRsi").textContent = rsi ? money.format(rsi) : "-";
+    byId("sigScore").textContent = latest.confirmation_score ?? latest.score ?? "-";
+  }
+
+  function renderAi(rows = []) {
+    const log = byId("aiLog");
+    const list = Array.isArray(rows) ? rows : [];
+    drawIndicatorChart(list);
+    if (!list.length) {
+      log.innerHTML = `<div class="empty">Belum ada keputusan AI.</div>`;
+      renderSignalSnapshot({});
+      return;
+    }
+    const latest = list[0] || {};
+    renderSignalSnapshot(latest);
+    log.innerHTML = list.slice(0, 20).map(d => {
       const conf = Number(d.confidence ?? 0);
-      const cls  = d.action === "BUY" ? "ok" : d.action === "SELL" ? "bad" : "";
+      const cls = d.action === "BUY" ? "ok" : d.action === "SELL" ? "bad" : "";
+      const volume = Number(d.volume_ratio ?? d.vol_ratio ?? 0);
+      const adx = Number(d.adx ?? 0);
+      const vwapBias = d.price_above_vwap === undefined ? "-" : (d.price_above_vwap ? "Above VWAP" : "Below VWAP");
+      const emaBias = d.price_above_ema20 === undefined ? "-" : ((d.price_above_ema20 && d.price_above_ema50) ? "Above EMA20/50" : (!d.price_above_ema20 && !d.price_above_ema50 ? "Below EMA20/50" : "Mixed EMA"));
       return `<div class="log-item">
         <strong>${d.symbol || "-"}</strong>
         <span class="${cls}">${d.action || "-"}</span>
         · conf <strong>${money.format(conf)}</strong>
         · score ${d.score ?? "-"}
+        · confirm ${d.confirmation_score ?? "-"}
+        <br><span style="color:var(--muted);font-size:12px">VWAP ${vwapBias} · EMA ${emaBias} · ADX ${adx ? money.format(adx) : "-"} · Vol ${volume ? fmtMoneySmart(volume) + "x" : "-"}</span>
         <br><span style="color:var(--muted);font-size:12px">${d.reason || d.mode || "-"}</span>
       </div>`;
     }).join("");
   }
-
   // ─── HISTORY MONITOR ─────────────────────────────────────
   function renderMonitor(data = {}) {
     byId("monitorTime").textContent = data.updated_at || "-";

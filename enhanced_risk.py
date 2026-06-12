@@ -1,4 +1,4 @@
-﻿# ENHANCED RISK MANAGEMENT MODULE
+# ENHANCED RISK MANAGEMENT MODULE
 # Based on Crypto Futures Trading Guide - Advanced Risk Rules
 # Line count: 65 lines (WELL UNDER 350 LIMIT)
 
@@ -128,3 +128,18 @@ def check_funding_rate_risk(funding_rate: float) -> bool:
         return False  # High risk
     return True  # Acceptable risk
 
+def check_market_sentiment(btc_trend: str, trade_side: str) -> bool:
+    """Filter korelasi: Jangan melawan tren BTC"""
+    btc_trend = str(btc_trend or "sideways").lower()
+    trade_side = str(trade_side or "HOLD").upper()
+    if btc_trend == "bearish" and trade_side == "BUY": return False
+    if btc_trend == "bullish" and trade_side == "SELL": return False
+    return True
+
+def is_exposure_safe(positions, new_trade_notional, balance, max_exposure_ratio=3.0):
+    """Proteksi Exposure: Batasi total nilai posisi agar tidak overload"""
+    current_notional = sum(abs(float(p.get("positionAmt", 0)) * float(p.get("entryPrice", 0))) for p in positions if float(p.get("positionAmt", 0)) != 0)
+    total_potential = current_notional + new_trade_notional
+    if balance <= 0: return {"allowed": False, "reason": "Saldo tidak cukup"}
+    ratio = total_potential / balance
+    return {"allowed": ratio <= max_exposure_ratio, "ratio": round(ratio, 2), "reason": f"Leverage total {ratio:.2f}x (Batas: {max_exposure_ratio}x)"}

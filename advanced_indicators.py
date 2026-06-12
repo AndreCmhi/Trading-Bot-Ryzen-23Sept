@@ -1,4 +1,4 @@
-﻿# Advanced Technical Indicators for Trading Bot
+# Advanced Technical Indicators for Trading Bot
 # Based on Crypto Futures Trading Guide
 
 import math

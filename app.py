@@ -1,4 +1,4 @@
-﻿from datetime import datetime
+from datetime import datetime
 from functools import wraps
 import hmac
 import json
@@ -64,6 +64,7 @@ from ai_decision import (
     OLLAMA_ENABLED,
     OLLAMA_MODEL,
 )
+from advanced_indicators import calculate_adx, calculate_vwap
 import config
 from risk_guard import count_consecutive_losses, evaluate_pre_trade
 from enhanced_risk import calculate_kelly_criterion, calculate_daily_loss_limit, calculate_drawdown_protection, check_funding_rate_risk, calculate_consecutive_loss_protection
@@ -85,10 +86,10 @@ MAX_RISK_PER_TRADE_PERCENT = float(os.getenv("MAX_RISK_PER_TRADE_PERCENT", "2.0"
 DEFAULT_MIN_RISK_REWARD_RATIO = float(os.getenv("DEFAULT_MIN_RISK_REWARD_RATIO", "2.0"))
 DEFAULT_TRADING_STYLE = str(os.getenv("DEFAULT_TRADING_STYLE", "AUTO")).strip().upper()
 DEFAULT_MARGIN_MODE = str(os.getenv("DEFAULT_MARGIN_MODE", "ISOLATED")).strip().upper()
-TRAILING_TRIGGER_ROI_PERCENT = float(os.getenv("TRAILING_TRIGGER_ROI_PERCENT", "3.0"))
-TRAILING_CALLBACK_ROI_PERCENT = float(os.getenv("TRAILING_CALLBACK_ROI_PERCENT", "1.0"))
-FAST_TRAILING_TRIGGER_ROI_PERCENT = float(os.getenv("FAST_TRAILING_TRIGGER_ROI_PERCENT", "0.10"))
-FAST_TRAILING_CALLBACK_ROI_PERCENT = float(os.getenv("FAST_TRAILING_CALLBACK_ROI_PERCENT", "0.08"))
+TRAILING_TRIGGER_ROI_PERCENT = float(os.getenv("TRAILING_TRIGGER_ROI_PERCENT", "2.5"))
+TRAILING_CALLBACK_ROI_PERCENT = float(os.getenv("TRAILING_CALLBACK_ROI_PERCENT", "0.8"))
+FAST_TRAILING_TRIGGER_ROI_PERCENT = float(os.getenv("FAST_TRAILING_TRIGGER_ROI_PERCENT", "0.9"))
+FAST_TRAILING_CALLBACK_ROI_PERCENT = float(os.getenv("FAST_TRAILING_CALLBACK_ROI_PERCENT", "0.25"))
 ADAPTIVE_PERFORMANCE_LOOKBACK_TRADES = int(os.getenv("ADAPTIVE_PERFORMANCE_LOOKBACK_TRADES", "24"))
 BUY_SCALPING_PAUSE_MIN_TRADES = int(os.getenv("BUY_SCALPING_PAUSE_MIN_TRADES", "6"))
 BUY_SCALPING_PAUSE_MAX_WINRATE = float(os.getenv("BUY_SCALPING_PAUSE_MAX_WINRATE", "20"))
@@ -107,10 +108,10 @@ RELAXED_SETUP_MODE = os.getenv("RELAXED_SETUP_MODE", "false").lower() == "true"
 UNRESTRICTED_SCAN_UNIVERSE = True
 DISABLE_TREND_FILTER = os.getenv("DISABLE_TREND_FILTER", "false").lower() == "true"
 DISABLE_PULLBACK_FILTER = os.getenv("DISABLE_PULLBACK_FILTER", "false").lower() == "true"
-MAX_OPEN_POSITIONS = int(os.getenv("MAX_OPEN_POSITIONS", "20"))
+MAX_OPEN_POSITIONS = int(os.getenv("MAX_OPEN_POSITIONS", "30"))
 MAX_DAILY_LOSS_USDT = float(os.getenv("MAX_DAILY_LOSS_USDT", "100"))
 MAX_CONSECUTIVE_LOSSES = int(os.getenv("MAX_CONSECUTIVE_LOSSES", "5"))
-MAX_TRADES_PER_HOUR = int(os.getenv("MAX_TRADES_PER_HOUR", "2"))
+MAX_TRADES_PER_HOUR = int(os.getenv("MAX_TRADES_PER_HOUR", "15"))
 MAX_LOSSES_PER_HOUR = int(os.getenv("MAX_LOSSES_PER_HOUR", "1"))
 HOURLY_LOSS_LIMIT_USDT = float(os.getenv("HOURLY_LOSS_LIMIT_USDT", "0.5"))
 LOSS_COOLDOWN_MINUTES = int(os.getenv("LOSS_COOLDOWN_MINUTES", "60"))
@@ -122,7 +123,7 @@ HARD_STOP_SYMBOL_COOLDOWN_MINUTES = int(os.getenv("HARD_STOP_SYMBOL_COOLDOWN_MIN
 AUTO_PAUSE_ON_GUARD_HALT = os.getenv("AUTO_PAUSE_ON_GUARD_HALT", "false").lower() == "true"
 AUTO_CLOSE_POSITIONS_ON_GUARD_HALT = os.getenv("AUTO_CLOSE_POSITIONS_ON_GUARD_HALT", "true").lower() == "true"
 AUTO_CLOSE_ENABLED = os.getenv("AUTO_CLOSE_ENABLED", "true").lower() == "true"
-AUTO_CLOSE_ROI_PERCENT = float(os.getenv("AUTO_CLOSE_ROI_PERCENT", "12"))
+AUTO_CLOSE_ROI_PERCENT = float(os.getenv("AUTO_CLOSE_ROI_PERCENT", "3.0"))
 MAX_ALLOWED_ATR_PERCENT = float(os.getenv("MAX_ALLOWED_ATR_PERCENT", "1.8"))
 TOP_SYMBOL_LIMIT = int(os.getenv("TOP_SYMBOL_LIMIT", "20"))
 SYMBOL_RANK_REFRESH_SECONDS = int(os.getenv("SYMBOL_RANK_REFRESH_SECONDS", "900"))
@@ -135,8 +136,8 @@ MIN_EMA_SLOPE_1H = float(os.getenv("MIN_EMA_SLOPE_1H", "0.015"))
 PARTIAL_TP_ROI_PERCENT = float(os.getenv("PARTIAL_TP_ROI_PERCENT", "10.0"))
 PARTIAL_CLOSE_FRACTION = float(os.getenv("PARTIAL_CLOSE_FRACTION", "0.35"))
 BREAKEVEN_TRIGGER_ROI_PERCENT = float(os.getenv("BREAKEVEN_TRIGGER_ROI_PERCENT", "6.0"))
-TRAILING_TRIGGER_ROI_PERCENT = float(os.getenv("TRAILING_TRIGGER_ROI_PERCENT", "8.0"))
-TRAILING_CALLBACK_ROI_PERCENT = float(os.getenv("TRAILING_CALLBACK_ROI_PERCENT", "2.5"))
+TRAILING_TRIGGER_ROI_PERCENT = float(os.getenv("TRAILING_TRIGGER_ROI_PERCENT", "2.5"))
+TRAILING_CALLBACK_ROI_PERCENT = float(os.getenv("TRAILING_CALLBACK_ROI_PERCENT", "0.8"))
 HARD_STOP_ROI_PERCENT = float(os.getenv("HARD_STOP_ROI_PERCENT", "-4.0"))
 SYMBOL_SCAN_MODE = os.getenv("SYMBOL_SCAN_MODE", "ALL").strip().upper()
 MANUAL_BLOCKED_SYMBOLS = {
@@ -802,18 +803,22 @@ def load_trades():
         if not DATA_FILE.exists():
             return []
 
-        try:
-            with DATA_FILE.open("r", encoding="utf-8") as file:
-                return json.load(file)
-        except (json.JSONDecodeError, OSError) as exc:
-            print(f"LOAD TRADES ERROR: {exc}")
-            return []
-
+        for attempt in range(2):
+            try:
+                with DATA_FILE.open("r", encoding="utf-8") as file:
+                    data = json.load(file)
+                    return data if isinstance(data, list) else []
+            except (json.JSONDecodeError, OSError) as exc:
+                if attempt == 0:
+                    time.sleep(0.1)
+                    continue
+                print(f"LOAD TRADES ERROR: {exc}")
+                return []
 
 def get_default_settings():
     return {
         "ai_enabled": AI_ENABLED,
-        "strategy_mode": "BALANCED",
+        "strategy_mode": "SCALPING",
         "trading_style": normalize_trading_style(DEFAULT_TRADING_STYLE),
         "risk_per_trade_percent": DEFAULT_RISK_PER_TRADE_PERCENT,
         "max_risk_per_trade_percent": MAX_RISK_PER_TRADE_PERCENT,
@@ -849,7 +854,7 @@ def get_default_settings():
         "trailing_enabled": True,
         "trailing_trigger_roi_percent": TRAILING_TRIGGER_ROI_PERCENT,
         "trailing_callback_roi_percent": TRAILING_CALLBACK_ROI_PERCENT,
-        "fast_trailing_enabled": False,
+        "fast_trailing_enabled": True,
         "fast_trailing_trigger_roi_percent": FAST_TRAILING_TRIGGER_ROI_PERCENT,
         "fast_trailing_callback_roi_percent": FAST_TRAILING_CALLBACK_ROI_PERCENT,
         "disable_trend_filter": DISABLE_TREND_FILTER,
@@ -979,11 +984,18 @@ def rebuild_auto_blacklist():
     return generated
 
 
+def write_json_atomic(path_obj, data):
+    tmp_path = path_obj.with_suffix(path_obj.suffix + ".tmp")
+    with tmp_path.open("w", encoding="utf-8") as file:
+        json.dump(data, file, indent=4)
+        file.flush()
+        os.fsync(file.fileno())
+    os.replace(tmp_path, path_obj)
+
+
 def save_runtime_settings(data):
     with settings_lock:
-        with SETTINGS_FILE.open("w", encoding="utf-8") as file:
-            json.dump(data, file, indent=4)
-
+        write_json_atomic(SETTINGS_FILE, data)
 
 def initialize_runtime_settings():
     global runtime_settings, AI_ENABLED
@@ -992,11 +1004,9 @@ def initialize_runtime_settings():
     runtime_settings["strategy_mode"] = normalize_strategy_mode(runtime_settings.get("strategy_mode"))
     save_runtime_settings(runtime_settings)
 
-
 def get_runtime_settings():
     with settings_lock:
         return dict(runtime_settings)
-
 
 def update_runtime_settings(new_values):
     global runtime_settings, AI_ENABLED
@@ -1004,10 +1014,8 @@ def update_runtime_settings(new_values):
         runtime_settings.update(new_values)
         AI_ENABLED = bool(runtime_settings.get("ai_enabled", True))
         snapshot = dict(runtime_settings)
-        with SETTINGS_FILE.open("w", encoding="utf-8") as file:
-            json.dump(snapshot, file, indent=4)
+        write_json_atomic(SETTINGS_FILE, snapshot)
     return snapshot
-
 
 def load_manual_roi():
     with manual_roi_lock:
@@ -1022,12 +1030,9 @@ def load_manual_roi():
             print(f"LOAD MANUAL ROI ERROR: {exc}")
             return {}
 
-
 def save_manual_roi(data):
     with manual_roi_lock:
-        with MANUAL_ROI_FILE.open("w", encoding="utf-8") as file:
-            json.dump(data, file, indent=4)
-
+        write_json_atomic(MANUAL_ROI_FILE, data)
 
 def load_manual_tp_sl():
     with manual_tp_sl_lock:
@@ -1042,12 +1047,9 @@ def load_manual_tp_sl():
             print(f"LOAD MANUAL TP/SL ERROR: {exc}")
             return {}
 
-
 def save_manual_tp_sl(data):
     with manual_tp_sl_lock:
-        with MANUAL_TP_SL_FILE.open("w", encoding="utf-8") as file:
-            json.dump(data, file, indent=4)
-
+        write_json_atomic(MANUAL_TP_SL_FILE, data)
 
 def load_ai_decisions():
     if not AI_DECISIONS_FILE.exists():
@@ -1060,28 +1062,22 @@ def load_ai_decisions():
     except (json.JSONDecodeError, OSError):
         return []
 
-
 def save_ai_decisions(decisions):
     trimmed = decisions[-100:]
     with trades_lock:
-        with AI_DECISIONS_FILE.open("w", encoding="utf-8") as file:
-            json.dump(trimmed, file, indent=4)
-
+        write_json_atomic(AI_DECISIONS_FILE, trimmed)
 
 def add_ai_decision(decision):
     decisions = load_ai_decisions()
     decisions.append(decision)
     save_ai_decisions(decisions)
 
-
 def add_trade(trade):
     with trades_lock:
         trades = load_trades()
         trades.append(trade)
-        with DATA_FILE.open("w", encoding="utf-8") as file:
-            json.dump(trades, file, indent=4)
+        write_json_atomic(DATA_FILE, trades)
     rebuild_auto_blacklist()
-
 
 def ensure_open_trade_record(symbol, position=None):
     symbol = str(symbol or "")
@@ -1150,19 +1146,28 @@ def ensure_open_trade_record(symbol, position=None):
             "pnl": 0,
         }
         trades.append(adopted_trade)
-        with DATA_FILE.open("w", encoding="utf-8") as file:
-            json.dump(trades, file, indent=4)
+        write_json_atomic(DATA_FILE, trades)
 
     rebuild_auto_blacklist()
     print(f"ADOPTED OPEN POSITION {symbol}: local OPEN trade record dibuat dari posisi exchange.")
     return adopted_trade
 
-
 def save_trades(trades):
     with trades_lock:
-        with DATA_FILE.open("w", encoding="utf-8") as file:
-            json.dump(trades, file, indent=4)
+        write_json_atomic(DATA_FILE, trades)
     rebuild_auto_blacklist()
+
+def initialize_runtime_settings():
+    global runtime_settings, AI_ENABLED
+    runtime_settings = load_runtime_settings()
+    AI_ENABLED = bool(runtime_settings.get("ai_enabled", True))
+    runtime_settings["strategy_mode"] = normalize_strategy_mode(runtime_settings.get("strategy_mode"))
+    save_runtime_settings(runtime_settings)
+
+
+def get_runtime_settings():
+    with settings_lock:
+        return dict(runtime_settings)
 
 
 def parse_trade_datetime(value):
@@ -2229,15 +2234,53 @@ def get_current_positions():
         return []
 
 
-def get_klines(symbol, interval="1m", limit=100):
+def get_ohlcv(symbol, interval="1m", limit=100):
     try:
         klines = call_binance("futures_klines", symbol=symbol, interval=interval, limit=limit)
-        return [float(item[4]) for item in klines]
+        closes = [float(item[4]) for item in klines]
+        volumes = [float(item[5]) for item in klines]
+        return closes, volumes
     except Exception as exc:
         if _is_retryable_network_error(exc):
             set_symbol_error_cooldown(symbol, seconds=240 if config.TESTNET else 120)
         raise
 
+def get_klines(symbol, interval="1m", limit=100):
+    closes, _ = get_ohlcv(symbol, interval=interval, limit=limit)
+    return closes
+def get_market_confirmation_snapshot(closes, volumes):
+    closes = [float(price) for price in closes if price is not None]
+    volumes = [float(volume) for volume in volumes if volume is not None]
+    if not closes:
+        return {
+            "vwap": 0.0,
+            "ema20": 0.0,
+            "ema50": 0.0,
+            "adx": 0.0,
+            "volume_ratio": 0.0,
+            "price_above_vwap": False,
+            "price_above_ema20": False,
+            "price_above_ema50": False,
+        }
+
+    price = closes[-1]
+    ema20 = calculate_ema(closes, 20)
+    ema50 = calculate_ema(closes, 50)
+    vwap = calculate_vwap(closes, volumes) if volumes else 0.0
+    adx = calculate_adx(closes, 14)
+    avg_volume = sum(volumes) / len(volumes) if volumes else 0.0
+    volume_ratio = (volumes[-1] / avg_volume) if avg_volume > 0 and volumes else 0.0
+
+    return {
+        "vwap": round(float(vwap), 8),
+        "ema20": round(float(ema20), 8),
+        "ema50": round(float(ema50), 8),
+        "adx": round(float(adx), 4),
+        "volume_ratio": round(float(volume_ratio), 4),
+        "price_above_vwap": bool(price >= vwap) if vwap > 0 else False,
+        "price_above_ema20": bool(price >= ema20) if ema20 > 0 else False,
+        "price_above_ema50": bool(price >= ema50) if ema50 > 0 else False,
+    }
 
 def get_trend_label(closes):
     ema_fast = calculate_ema(closes, 9)
@@ -2323,10 +2366,10 @@ def evaluate_strategy_setup(symbol):
     disable_pullback_filter = settings.get('disable_pullback_filter', DISABLE_PULLBACK_FILTER)
 
     profile = get_strategy_profile()
-    closes_1m = get_klines(symbol, interval="1m", limit=120)
-    closes_5m = get_klines(symbol, interval="5m", limit=120)
-    closes_15m = get_klines(symbol, interval="15m", limit=120)
-    closes_1h = get_klines(symbol, interval="1h", limit=120)
+    closes_1m, volumes_1m = get_ohlcv(symbol, interval="1m", limit=120)
+    closes_5m, _ = get_ohlcv(symbol, interval="5m", limit=120)
+    closes_15m, _ = get_ohlcv(symbol, interval="15m", limit=120)
+    closes_1h, _ = get_ohlcv(symbol, interval="1h", limit=120)
 
     atr_percent = calculate_atr_percent(closes_1m, 14)
     rsi = round(calculate_rsi(closes_1m), 2)
@@ -2336,6 +2379,17 @@ def evaluate_strategy_setup(symbol):
     slope_5m = get_ema_slope_percent(closes_5m, 21, 5)
     slope_15m = get_ema_slope_percent(closes_15m, 21, 5)
     slope_1h = get_ema_slope_percent(closes_1h, 21, 5)
+
+    confirmation = get_market_confirmation_snapshot(closes_1m, volumes_1m)
+    price = float(closes_1m[-1]) if closes_1m else 0.0
+    vwap = float(confirmation["vwap"])
+    ema20 = float(confirmation["ema20"])
+    ema50 = float(confirmation["ema50"])
+    adx = float(confirmation["adx"])
+    volume_ratio = float(confirmation["volume_ratio"])
+    price_above_vwap = bool(confirmation["price_above_vwap"])
+    price_above_ema20 = bool(confirmation["price_above_ema20"])
+    price_above_ema50 = bool(confirmation["price_above_ema50"])
 
     if not disable_trend_filter and trend_1h == "mixed":
         return {
@@ -2404,6 +2458,20 @@ def evaluate_strategy_setup(symbol):
             "reason": f"Trigger candle {side} belum menembus struktur micro 1m.",
         }
 
+    confirmation_score = 0
+    if side == "BUY":
+        confirmation_score += 2 if price_above_vwap else 0
+        confirmation_score += 2 if price_above_ema20 and price_above_ema50 else 0
+        confirmation_score += 1 if volume_ratio >= 1.2 else 0
+        confirmation_score += 2 if adx >= 25 else 1 if adx >= 20 else 0
+        confirmation_score += 1 if rsi > 50 else 0
+    else:
+        confirmation_score += 2 if not price_above_vwap else 0
+        confirmation_score += 2 if not price_above_ema20 and not price_above_ema50 else 0
+        confirmation_score += 1 if volume_ratio >= 1.2 else 0
+        confirmation_score += 2 if adx >= 25 else 1 if adx >= 20 else 0
+        confirmation_score += 1 if rsi < 50 else 0
+
     funding_rate = get_latest_funding_rate(symbol)
     if not TEST_MINIMUM_TRADING_MODE and funding_rate is not None:
         if side == "BUY" and funding_rate > MAX_ALLOWED_FUNDING_RATE:
@@ -2423,6 +2491,7 @@ def evaluate_strategy_setup(symbol):
     score += 1 if trend_5m == ("bullish" if side == "BUY" else "bearish") else 0
     score += 2 if pullback_ok else 0
     score += 2 if trigger_ok else 0
+    score += confirmation_score
     if side == "BUY" and float(profile["buy_rsi_min"]) <= rsi <= float(profile["buy_rsi_max"]):
         score += 2
     elif side == "SELL" and float(profile["sell_rsi_min"]) <= rsi <= float(profile["sell_rsi_max"]):
@@ -2442,18 +2511,31 @@ def evaluate_strategy_setup(symbol):
         "atr_percent": atr_percent,
         "funding_rate": funding_rate,
         "closes_1m": closes_1m,
+        "volumes_1m": volumes_1m,
         "trend_5m": trend_5m,
         "trend_15m": trend_15m,
         "trend_1h": trend_1h,
+        "volume_ratio": volume_ratio,
+        "vwap": vwap,
+        "ema20": ema20,
+        "ema50": ema50,
+        "adx": adx,
+        "price_above_vwap": price_above_vwap,
+        "price_above_ema20": price_above_ema20,
+        "price_above_ema50": price_above_ema50,
+        "confirmation_score": confirmation_score,
         "reason": (
             f"Bias {side} | trend filter {'off' if disable_trend_filter else 'on'} | "
             f"pullback {'off' if disable_pullback_filter else ('ok' if pullback_ok else 'longgar')} | "
-            f"trigger {'ok' if trigger_ok else 'longgar'}, funding aman."
+            f"trigger {'ok' if trigger_ok else 'longgar'} | "
+            f"VWAP {'ok' if (side == 'BUY' and price_above_vwap) or (side == 'SELL' and not price_above_vwap) else 'no'} | "
+            f"EMA20/50 {'ok' if (side == 'BUY' and price_above_ema20 and price_above_ema50) or (side == 'SELL' and not price_above_ema20 and not price_above_ema50) else 'no'} | "
+            f"ADX {adx:.1f} | volume x{volume_ratio:.2f} | funding aman."
         ),
     }
 
-
 def get_open_trade_record(symbol, adopt_if_missing=False, position=None):
+
     trades = load_trades()
     for trade in reversed(trades):
         if trade.get("symbol") == symbol and trade.get("status") == "OPEN":
@@ -2536,13 +2618,12 @@ def calculate_rsi(closes, period=14):
 
 def score_symbol(symbol):
     try:
-        closes = get_klines(symbol)
-        rsi = calculate_rsi(closes)
-        score, _ = evaluate_signal_strength(closes, rsi)
-        return score, round(rsi, 2)
+        setup = evaluate_strategy_setup(symbol)
+        if not setup.get("allowed"):
+            return 0, round(float(setup.get("rsi", 50) or 50), 2)
+        return int(setup.get("score", 0) or 0), round(float(setup.get("rsi", 50) or 50), 2)
     except Exception:
         return 0, 50
-
 
 def evaluate_signal_strength(closes, rsi):
     if len(closes) < 21:
@@ -2607,6 +2688,15 @@ def evaluate_ai_trade(symbol, score, rsi, closes, setup=None, balance=0.0, setti
                 "trend_15m": str(setup.get("trend_15m", "") or "").lower(),
                 "trend_1h": str(setup.get("trend_1h", "") or "").lower(),
                 "funding_rate": setup.get("funding_rate"),
+                "vol_ratio": round(float(setup.get("volume_ratio", 0) or 0), 4),
+                "adx": round(float(setup.get("adx", 0) or 0), 4),
+                "vwap": round(float(setup.get("vwap", 0) or 0), 8),
+                "ema20": round(float(setup.get("ema20", 0) or 0), 8),
+                "ema50": round(float(setup.get("ema50", 0) or 0), 8),
+                "price_above_vwap": bool(setup.get("price_above_vwap", False)),
+                "price_above_ema20": bool(setup.get("price_above_ema20", False)),
+                "price_above_ema50": bool(setup.get("price_above_ema50", False)),
+                "confirmation_score": int(setup.get("confirmation_score", 0) or 0),
             }
         )
 
@@ -3396,6 +3486,18 @@ def execute_trade(symbol):
             settings=settings,
             performance_context=performance_context,
         )
+        ai_decision.update({
+            "volume_ratio": round(float(setup.get("volume_ratio", 0) or 0), 4),
+            "vwap": round(float(setup.get("vwap", 0) or 0), 8),
+            "ema20": round(float(setup.get("ema20", 0) or 0), 8),
+            "ema50": round(float(setup.get("ema50", 0) or 0), 8),
+            "adx": round(float(setup.get("adx", 0) or 0), 4),
+            "price_above_vwap": bool(setup.get("price_above_vwap", False)),
+            "price_above_ema20": bool(setup.get("price_above_ema20", False)),
+            "price_above_ema50": bool(setup.get("price_above_ema50", False)),
+            "confirmation_score": int(setup.get("confirmation_score", 0) or 0),
+            "trend_bias": "bullish" if side == "BUY" else "bearish",
+        })
         guard_reason = guard.get("reason", "")
         guard_risk_multiplier = float(guard.get("risk_multiplier", 1.0) or 1.0)
         guard_leverage_cap = guard.get("leverage_cap")
@@ -3457,6 +3559,15 @@ def execute_trade(symbol):
             "qty": qty,
             "score": score,
             "rsi": rsi,
+            "volume_ratio": round(float(setup.get("volume_ratio", 0) or 0), 4),
+            "vwap": round(float(setup.get("vwap", 0) or 0), 8),
+            "ema20": round(float(setup.get("ema20", 0) or 0), 8),
+            "ema50": round(float(setup.get("ema50", 0) or 0), 8),
+            "adx": round(float(setup.get("adx", 0) or 0), 4),
+            "price_above_vwap": bool(setup.get("price_above_vwap", False)),
+            "price_above_ema20": bool(setup.get("price_above_ema20", False)),
+            "price_above_ema50": bool(setup.get("price_above_ema50", False)),
+            "confirmation_score": int(setup.get("confirmation_score", 0) or 0),
             "ai_confidence": ai_decision["confidence"] if AI_ENABLED else None,
             "ai_reason": ai_decision["reason"] if AI_ENABLED else "AI disabled",
             "ai_mode": ai_decision["mode"] if AI_ENABLED else "disabled",
@@ -4395,6 +4506,9 @@ if __name__ == "__main__":
         debug=False,
         allow_unsafe_werkzeug=True,
     )
+
+
+
 
 
 

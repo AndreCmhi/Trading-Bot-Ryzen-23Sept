@@ -1,4 +1,4 @@
-﻿import csv
+import csv
 import json
 from collections import Counter, defaultdict
 from datetime import datetime
@@ -28,6 +28,64 @@ def parse_dt(value):
         except: continue
     return None
 
+
+def bucket_volume(value):
+    value = parse_float(value)
+    if value >= 1.8:
+        return "high"
+    if value >= 1.2:
+        return "medium"
+    if value > 0:
+        return "low"
+    return "unknown"
+
+def bucket_adx(value):
+    value = parse_float(value)
+    if value < 20:
+        return "weak"
+    if value <= 25:
+        return "average"
+    return "strong"
+
+def bucket_vwap_bias(trade):
+    if trade.get("price_above_vwap") is True:
+        return "above"
+    if trade.get("price_above_vwap") is False:
+        return "below"
+    return "unknown"
+
+def bucket_ema_bias(trade):
+    above20 = trade.get("price_above_ema20")
+    above50 = trade.get("price_above_ema50")
+    if above20 is True and above50 is True:
+        return "above_both"
+    if above20 is False and above50 is False:
+        return "below_both"
+    if above20 is None or above50 is None:
+        return "unknown"
+    return "mixed"
+
+def indicator_buckets_for_trade(trade):
+    return {
+        "volume_bucket": bucket_volume(trade.get("volume_ratio")),
+        "vwap_bias": bucket_vwap_bias(trade),
+        "ema_bias": bucket_ema_bias(trade),
+        "adx_bucket": bucket_adx(trade.get("adx")),
+    }
+
+def summarize_indicator_groups(trades):
+    buckets = defaultdict(list)
+    for trade in trades:
+        info = indicator_buckets_for_trade(trade)
+        for key, bucket in info.items():
+            if bucket != "unknown":
+                buckets[(key, bucket)].append(trade)
+    rows = []
+    for (key, bucket), items in buckets.items():
+        result = summarize(items)
+        rows.append([key, bucket, result["trades"], f'{result["win_rate"]:.2f}%', f'{result["total_pnl"]:.2f}', f'{result["avg_pnl"]:.4f}'])
+    rows.sort(key=lambda row: (row[0], row[1]))
+    return rows
 def summarize(trades):
     pnls = [parse_float(trade.get("pnl")) for trade in trades]
     total = len(pnls)
@@ -159,6 +217,10 @@ def main():
                 "trailing_enabled", "trading_style", "ai_min_confidence"]
     cfg_rows = [[k, settings.get(k, "-")] for k in cfg_keys if k in settings]
     report.append(table(["Setting", "Value"], cfg_rows))
+
+    indicator_rows = summarize_indicator_groups(closed_sorted)
+    report.append("\n## Indicator Summary")
+    report.append(table(["Type", "Bucket", "Trades", "Win Rate", "Total PnL", "Avg PnL"], indicator_rows if indicator_rows else [["volume", "unknown", 0, "0.00%", "0.00", "0.0000"]]))
 
     report.append("\n---")
     report.append("\n*Auto-generated every hour*\n")

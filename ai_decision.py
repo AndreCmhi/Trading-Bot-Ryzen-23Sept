@@ -115,23 +115,21 @@ def build_market_snapshot(symbol, closes=None, score=0, rsi=50, extras=None):
     ema_fast = calculate_ema(series, 9)
     ema_slow = calculate_ema(series, 21)
     atr_percent = calculate_atr_percent(series, 14)
-    trend = "sideways"
-    if last_price and ema_fast and ema_slow:
-        if ema_fast > ema_slow and last_price >= ema_fast:
-            trend = "bullish"
-        elif ema_fast < ema_slow and last_price <= ema_fast:
-            trend = "bearish"
+
+    # Tambahan data Slope untuk AI
+    slope_5m = extras.get("slope_5m", 0.0) if extras else 0.0
+    slope_15m = extras.get("slope_15m", 0.0) if extras else 0.0
+   
     snapshot = {
         "symbol": str(symbol or "").upper(),
         "score": round(_safe_float(score), 4),
         "rsi": round(_safe_float(rsi, 50.0), 4),
         "last_price": round(last_price, 8),
-        "ema_fast": round(ema_fast, 8),
-        "ema_slow": round(ema_slow, 8),
+        "ema_slope_5m": round(slope_5m, 4),
+        "ema_slope_15m": round(slope_15m, 4),
         "atr_percent": atr_percent,
-        "trend": trend,
-        "close_count": len(series),
-        "recent_closes": [round(value, 8) for value in series[-20:]],
+        "trend": "bullish" if ema_fast > ema_slow else "bearish",
+        "market_regime": extras.get("market_regime", "UNKNOWN") if extras else "UNKNOWN"
     }
     if isinstance(extras, dict):
         snapshot.update(extras)
@@ -165,46 +163,165 @@ def _heuristic_decision(snapshot: Dict[str, Any]) -> Dict[str, Any]:
     atr_percent = max(_safe_float(snapshot.get("atr_percent"), 0.35), 0.1)
     min_rr = max(_safe_float(snapshot.get("min_risk_reward_ratio"), 2.0), 1.2)
 
+    # Advanced context
+    adx_val = _safe_float(snapshot.get("adx"), 0)
+    macd_hist = _safe_float(snapshot.get("macd_histogram"), 0)
+    stoch_k = _safe_float(snapshot.get("stoch_k"), 50)
+    stoch_d = _safe_float(snapshot.get("stoch_d"), 50)
+    vol_ratio = _safe_float(snapshot.get("vol_ratio"), 1.0)
+    bb_position = str(snapshot.get("bb_position", "inside")).lower()
+    trend_5m = str(snapshot.get("trend_5m", "sideways")).lower()
+    trend_15m = str(snapshot.get("trend_15m", "sideways")).lower()
+    trend_1h = str(snapshot.get("trend_1h", "sideways")).lower()
+    funding_rate = _safe_float(snapshot.get("funding_rate"), 0)
+
     action = "HOLD"
     allow_trade = False
     confidence = 0.45
+    suggested_leverage = 3
+    risk_mode = "normal"
 
     if candidate_side in {"BUY", "SELL"}:
         action = candidate_side
 
-    if action == "BUY" and trend == "bullish" and score >= 6 and rsi < 72:
-        allow_trade = True
-        confidence = 0.68 + min(max((score - 6) * 0.03, 0.0), 0.17)
-    elif action == "SELL" and trend == "bearish" and score >= 6 and rsi > 28:
-        allow_trade = True
-        confidence = 0.68 + min(max((score - 6) * 0.03, 0.0), 0.17)
-    else:
-        action = action if action in {"BUY", "SELL"} else "HOLD"
-        confidence = 0.42 if action != "HOLD" else 0.35
+    # Count trend alignment across timeframes
+    tf_bullish = sum(1 for t in [trend_5m, trend_15m, trend_1h] if t == "bullish")
+    tf_bearish = sum(1 for t in [trend_5m, trend_15m, trend_1h] if t == "bearish")
 
-    sl_percent = round(max(atr_percent * 2.5, 0.8), 4)
-    tp_percent = round(max(sl_percent * min_rr, sl_percent * 1.8), 4)
+    # Multi-factor confidence calculation
+    confidence_base = 0.45
+    score_factor = min(score / 10.0, 1.0) * 0.25
+
+    # Trend alignment bonus
+    if action == "BUY":
+        trend_bonus = tf_bullish * 0.05
+        trend_penalty = tf_bearish * 0.04
+    else:
+        trend_bonus = tf_bearish * 0.05
+        trend_penalty = tf_bullish * 0.04
+
+    # ADX trend strength
+    adx_bonus = 0
+    if adx_val >= 25:
+        adx_bonus = 0.08  # Strong trend
+    elif adx_val >= 20:
+        adx_bonus = 0.03  # Moderate
+    elif adx_val < 15:
+        adx_bonus = -0.05  # Weak trend, avoid
+
+    # MACD confirmation
+    if (action == "BUY" and macd_hist > 0) or (action == "SELL" and macd_hist < 0):
+        adx_bonus += 0.05
+    else:
+        adx_bonus -= 0.03
+
+    # RSI zone
+    rsi_bonus = 0
+    if action == "BUY":
+        if 40 <= rsi <= 65:
+            rsi_bonus = 0.06
+        elif 30 <= rsi < 40 and stoch_k < 20:
+            rsi_bonus = 0.08  # Oversold bounce
+        elif rsi > 70:
+            rsi_bonus = -0.06  # Overbought, risky
+    else:
+        if 35 <= rsi <= 60:
+            rsi_bonus = 0.06
+        elif 60 < rsi <= 70 and stoch_k > 80:
+            rsi_bonus = 0.08  # Overbought
+        elif rsi < 30:
+            rsi_bonus = -0.06  # Oversold, risky for SELL
+
+    # Bollinger bounce
+    bb_bonus = 0
+    if action == "BUY" and bb_position == "below_lower" and stoch_k < 25:
+        bb_bonus = 0.06
+    elif action == "SELL" and bb_position == "above_upper" and stoch_k > 75:
+        bb_bonus = 0.06
+
+    # Volume confirmation
+    vol_bonus = 0.03 if vol_ratio > 1.5 else 0
+
+    # Funding rate filter
+    funding_bonus = 0
+    if funding_rate != 0:
+        if action == "BUY" and funding_rate > 0.0005:
+            funding_bonus = -0.04
+        elif action == "SELL" and funding_rate < -0.0005:
+            funding_bonus = -0.04
+
+    # Combine all factors
+    raw_confidence = (
+        confidence_base +
+        score_factor +
+        trend_bonus +
+        adx_bonus +
+        rsi_bonus +
+        bb_bonus +
+        vol_bonus +
+        funding_bonus -
+        trend_penalty
+    )
+
+    # Normalize to 0.05-0.95
+    confidence = max(0.05, min(raw_confidence, 0.95))
+
+    # Determine if trade is allowed
+    min_conf = _safe_float(snapshot.get("ai_min_confidence"), 0.60)
+    allow_trade = confidence >= min_conf
+
+    # Dynamic SL/TP based on ADX and ATR
+    trend_strong = adx_val >= 25
+    trend_weak = adx_val < 20
+    if trend_strong:
+        sl_percent = round(max(atr_percent * 1.8, 0.6), 4)
+        tp_percent = round(max(sl_percent * min_rr, sl_percent * 2.0), 4)
+        suggested_leverage = 3
+        risk_mode = "normal"
+    elif trend_weak:
+        sl_percent = round(max(atr_percent * 2.0, 0.7), 4)
+        tp_percent = round(max(sl_percent * min_rr, sl_percent * 1.5), 4)
+        suggested_leverage = 2
+        risk_mode = "cautious"
+    else:
+        sl_percent = round(max(atr_percent * 2.0, 0.7), 4)
+        tp_percent = round(max(sl_percent * min_rr, sl_percent * 1.8), 4)
+        suggested_leverage = 3
+        risk_mode = "normal"
+
     suggested_risk_percent = 0.5
-    if allow_trade and confidence >= 0.78:
-        suggested_risk_percent = 1.0
-    elif allow_trade and confidence >= 0.7:
-        suggested_risk_percent = 0.75
+    if allow_trade:
+        if confidence >= 0.85:
+            suggested_risk_percent = 1.2
+            suggested_leverage = min(suggested_leverage + 1, 5)
+        elif confidence >= 0.78:
+            suggested_risk_percent = 0.9
+        elif confidence >= 0.72:
+            suggested_risk_percent = 0.75
+        elif confidence >= 0.65:
+            suggested_risk_percent = 0.6
 
     return {
         "provider": "local-heuristic",
-        "mode": "fallback",
+        "mode": "enhanced",
         "allow_trade": allow_trade,
         "action": action,
         "confidence": round(confidence, 4),
         "suggested_risk_percent": suggested_risk_percent,
-        "suggested_leverage": 10,
+        "suggested_leverage": suggested_leverage,
         "recommended_margin_mode": "ISOLATED",
         "tp_percent": tp_percent,
         "sl_percent": sl_percent,
         "risk_reward_ratio": calculate_risk_reward_ratio(tp_percent, sl_percent),
-        "risk_mode": "normal",
+        "risk_mode": risk_mode,
         "strategy_family": str(snapshot.get("trading_style", "SCALPING") or "SCALPING").upper(),
-        "reason": "Fallback heuristic decision used.",
+        "reason": (
+            f"enhanced-heuristic: score={score} trend={trend} "
+            f"adx={adx_val:.0f} macd_hist={macd_hist:.6f} "
+            f"rsi={rsi:.0f} stoch=({stoch_k:.0f},{stoch_d:.0f}) "
+            f"bb={bb_position} vol={vol_ratio:.1f}x "
+            f"conf={confidence:.2f}"
+        ),
     }
 
 

@@ -45,7 +45,7 @@
   <Actions Context="Author">
     <Exec>
       <Command>C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe</Command>
-      <Arguments>-WindowStyle Hidden -Command "cd 'C:\Users\Maria Oktavia\Documents\Trading-Bot-Ryzen'; python reporter.py"</Arguments>
+      <Arguments>-WindowStyle Hidden -Command "cd 'C:\Users\Maria Oktavia\Documents\Trading-Bot-Ryzen'; .\run_reporter.bat"</Arguments>
     </Exec>
   </Actions>
 </Task>

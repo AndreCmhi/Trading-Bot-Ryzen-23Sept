@@ -11,6 +11,8 @@ TRADES_FILE = BASE / "trades.json"
 SETTINGS_FILE = BASE / "runtime_settings.json"
 REPORT_FILE = BASE / "trade_report.md"
 CSV_FILE = BASE / "trade_report_by_symbol.csv"
+INDICATOR_REPORT_FILE = BASE / "indicator_backtest_log.md"
+INDICATOR_CSV_FILE = BASE / "trade_report_by_indicator.csv"
 
 
 def parse_float(value, default=0.0):
@@ -38,6 +40,88 @@ def parse_dt(value):
     return None
 
 
+
+def bucket_volume(value):
+    value = parse_float(value)
+    if value >= 1.8:
+        return "high"
+    if value >= 1.2:
+        return "medium"
+    if value > 0:
+        return "low"
+    return "unknown"
+
+def bucket_adx(value):
+    value = parse_float(value)
+    if value < 20:
+        return "weak"
+    if value <= 25:
+        return "average"
+    return "strong"
+
+def bucket_vwap_bias(trade):
+    if trade.get("price_above_vwap") is True:
+        return "above"
+    if trade.get("price_above_vwap") is False:
+        return "below"
+    return "unknown"
+
+def bucket_ema_bias(trade):
+    above20 = trade.get("price_above_ema20")
+    above50 = trade.get("price_above_ema50")
+    if above20 is True and above50 is True:
+        return "above_both"
+    if above20 is False and above50 is False:
+        return "below_both"
+    if above20 is None or above50 is None:
+        return "unknown"
+    return "mixed"
+
+def indicator_buckets_for_trade(trade):
+    return {
+        "volume_bucket": bucket_volume(trade.get("volume_ratio")),
+        "vwap_bias": bucket_vwap_bias(trade),
+        "ema_bias": bucket_ema_bias(trade),
+        "adx_bucket": bucket_adx(trade.get("adx")),
+    }
+
+def summarize_indicator_group(trades, key):
+    groups = defaultdict(list)
+    for trade in trades:
+        bucket = indicator_buckets_for_trade(trade).get(key, "unknown")
+        if bucket == "unknown":
+            continue
+        groups[bucket].append(trade)
+    rows = []
+    for bucket, items in groups.items():
+        result = summarize(items)
+        rows.append([bucket, result["trades"], f'{result["win_rate"]:.2f}%', f'{result["total_pnl"]:.2f}', f'{result["avg_pnl"]:.4f}'])
+    rows.sort(key=lambda row: int(row[1]), reverse=True)
+    return rows
+
+def indicator_backtest_rows(trades):
+    rows = []
+    for trade in trades[-50:]:
+        indicators = indicator_buckets_for_trade(trade)
+        rows.append([
+            trade.get("closed_time") or trade.get("time") or "-",
+            trade.get("symbol") or "-",
+            trade.get("side") or "-",
+            f'{parse_float(trade.get("pnl")):.2f}',
+            indicators["volume_bucket"],
+            indicators["vwap_bias"],
+            indicators["ema_bias"],
+            indicators["adx_bucket"],
+            trade.get("confirmation_score", "-"),
+        ])
+    return rows
+def load_json_file(path_obj, default_value):
+    if not path_obj.exists():
+        return default_value
+    try:
+        return json.loads(path_obj.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        return default_value
 def summarize(trades):
     pnls = [parse_float(trade.get("pnl")) for trade in trades]
     total = len(pnls)
@@ -79,8 +163,8 @@ def table(headers, rows):
 
 
 def main():
-    trades = json.loads(TRADES_FILE.read_text(encoding="utf-8")) if TRADES_FILE.exists() else []
-    settings = json.loads(SETTINGS_FILE.read_text(encoding="utf-8")) if SETTINGS_FILE.exists() else {}
+    trades = load_json_file(TRADES_FILE, [])
+    settings = load_json_file(SETTINGS_FILE, {})
     closed = [trade for trade in trades if trade.get("status") == "CLOSED"]
     open_trades = [trade for trade in trades if trade.get("status") == "OPEN"]
     closed_sorted = sorted(closed, key=lambda trade: parse_dt(trade.get("closed_time")) or parse_dt(trade.get("time")) or datetime.min)
@@ -156,6 +240,23 @@ def main():
     report.append(table(["Symbol", "Trades", "Win Rate", "Total PnL", "Avg PnL"], good_symbols))
     report.append("\n## Worst Symbols")
     report.append(table(["Symbol", "Trades", "Win Rate", "Total PnL", "Avg PnL"], bad_symbols))
+    volume_rows = summarize_indicator_group(closed_sorted, "volume_bucket")
+    vwap_rows = summarize_indicator_group(closed_sorted, "vwap_bias")
+    ema_rows = summarize_indicator_group(closed_sorted, "ema_bias")
+    adx_rows = summarize_indicator_group(closed_sorted, "adx_bucket")
+    indicator_log_rows = indicator_backtest_rows(closed_sorted)
+
+    report.append("\n## Indicator Backtest")
+    report.append(table(["Bucket", "Trades", "Win Rate", "Total PnL", "Avg PnL"], volume_rows))
+    report.append("\n### VWAP Bias")
+    report.append(table(["Bucket", "Trades", "Win Rate", "Total PnL", "Avg PnL"], vwap_rows))
+    report.append("\n### EMA Bias")
+    report.append(table(["Bucket", "Trades", "Win Rate", "Total PnL", "Avg PnL"], ema_rows))
+    report.append("\n### ADX Bucket")
+    report.append(table(["Bucket", "Trades", "Win Rate", "Total PnL", "Avg PnL"], adx_rows))
+    report.append("\n### Recent Indicator Log")
+    report.append(table(["Closed", "Symbol", "Side", "PnL", "Vol", "VWAP", "EMA", "ADX", "Confirm"], indicator_log_rows))
+
     report.append("\n## Recommendation")
     report.append("- Forward-test only on Binance Testnet until at least 30 new closed trades after SCALPING patch.")
     report.append("- Pass condition: new closed trades >= 30, win rate > 55%, total PnL >= 0, no hard-stop cluster.")
@@ -168,6 +269,12 @@ def main():
         writer.writerows(symbol_rows)
 
     print(f"Wrote {REPORT_FILE}")
+    INDICATOR_REPORT_FILE.write_text("\n".join(report) + "\n", encoding="utf-8")
+
+    with INDICATOR_CSV_FILE.open("w", encoding="utf-8", newline="") as file:
+        writer = csv.writer(file)
+        writer.writerow(["closed_time", "symbol", "side", "pnl", "volume_bucket", "vwap_bias", "ema_bias", "adx_bucket", "confirmation_score"])
+        writer.writerows(indicator_log_rows)
     print(f"Wrote {CSV_FILE}")
     print(f"closed={overall['trades']} winrate={overall['win_rate']:.2f}% pnl={overall['total_pnl']:.2f}")
     print(f"last20_winrate={last20_stats['win_rate']:.2f}% last20_pnl={last20_stats['total_pnl']:.2f}")
