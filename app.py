@@ -7,7 +7,27 @@ import os
 import secrets
 import socket
 import threading
-import time
+import requests
+import requests
+def send_telegram_msg(msg):
+    token = os.getenv('TELEGRAM_BOT_TOKEN')
+    chat_id = os.getenv('TELEGRAM_CHAT_ID')
+    if token and chat_id:
+        url = f'https://api.telegram.org/bot{token}/sendMessage'
+        try:
+            requests.post(url, data={'chat_id': chat_id, 'text': msg})
+        except:
+            pass
+
+def send_telegram_msg(msg):
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    if token and chat_id:
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        try:
+            requests.post(url, data={"chat_id": chat_id, "text": msg})
+        except:
+            pass
 from pathlib import Path
 import logging
 from logging.handlers import RotatingFileHandler
@@ -1223,8 +1243,25 @@ def get_realized_pnl_for_trade(symbol, opened_at=None):
             except Exception as exc:
                 print(f"Account trades fallback error {symbol}:", exc)
 
+
+    # Retry once if no income found
+    if not income_rows:
+        time.sleep(1)
+        income_fn = getattr(client, 'futures_income_history', None)
+        if callable(income_fn):
+            try:
+                income_rows = income_fn(
+                    symbol=symbol,
+                    incomeType='REALIZED_PNL',
+                    startTime=start_time,
+                    limit=50,
+                )
+            except Exception as exc:
+                print(f'Income retry error {symbol}:', exc)
+
     if not income_rows:
         return 0.0, None
+
 
     realized_pnl = 0.0
     latest_time = None
@@ -1262,6 +1299,8 @@ def sync_closed_trades():
         realized_pnl, closed_time = get_realized_pnl_for_trade(symbol, trade.get("time"))
         trade["pnl"] = realized_pnl
         trade["status"] = "CLOSED"
+        msg = f"Trade Closed: {symbol} | PnL: {realized_pnl:.2f} | Reason: {trade.get("close_reason", "-")}"
+        send_telegram_msg(msg)
         trade["close_reason"] = trade.get("close_reason") or "SYNC_CLOSE"
         trade["closed_time"] = closed_time
         trade["close_price"] = round(float(trade.get("close_price", 0) or 0), 4)
@@ -3085,13 +3124,15 @@ def update_trade_on_close(symbol, pnl, close_price, reason):
     for trade in reversed(trades):
         if trade.get("symbol") == symbol and trade.get("status") == "OPEN":
             trade["status"] = "CLOSED"
-            trade["pnl"] = round(float(pnl), 2)
-            trade["close_price"] = round(float(close_price), 4)
-            trade["close_reason"] = reason
-            trade["closed_time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            trades.sort(key=get_trade_reference_datetime)
-            save_trades(trades)
-            return trade
+        msg = f"Trade Closed: {symbol} | PnL: {realized_pnl:.2f} | Reason: {trade.get("close_reason", "-")}"
+        send_telegram_msg(msg)
+        trade["pnl"] = round(float(pnl), 2)
+        trade["close_price"] = round(float(close_price), 4)
+        trade["close_reason"] = reason
+        trade["closed_time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        trades.sort(key=get_trade_reference_datetime)
+        save_trades(trades)
+        return trade
     return None
 
 
@@ -4099,7 +4140,7 @@ def update_settings_api():
                 "auto_blacklist_min_consecutive_losses",
                 current_settings.get(
                     "auto_blacklist_min_consecutive_losses",
-                    AUTO_BLACKLIST_MIN_CONSECUTIVE_LOSSES,
+                    AUTO_BLACKLIST_MIN_CONSECUTIVE_LOSSES
                 ),
             )
         )
@@ -4506,6 +4547,8 @@ if __name__ == "__main__":
         debug=False,
         allow_unsafe_werkzeug=True,
     )
+
+
 
 
 
