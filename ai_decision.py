@@ -154,6 +154,57 @@ def _extract_json_block(text: str) -> Dict[str, Any]:
     except json.JSONDecodeError:
         return {}
 
+def _block_trade(reason: str) -> Dict[str, Any]:
+    return {
+        "allow_trade": False,
+        "action": "HOLD",
+        "quality_gate_reason": reason,
+    }
+
+def _quality_gate(snapshot: Dict[str, Any], decision: Dict[str, Any]) -> Dict[str, Any]:
+    action = str(decision.get("action", "HOLD") or "HOLD").upper()
+    if action not in {"BUY", "SELL"}:
+        return {}
+
+    score = _safe_float(snapshot.get("score"), 0.0)
+    min_score = _safe_float(snapshot.get("min_score"), 8.0)
+    confidence = _safe_float(decision.get("confidence"), 0.0)
+    min_confidence = _safe_float(snapshot.get("ai_min_confidence"), 0.75)
+    rr_ratio = _safe_float(decision.get("risk_reward_ratio"), 0.0)
+    min_rr = max(_safe_float(snapshot.get("min_risk_reward_ratio"), 2.0), 1.5)
+    adx_val = _safe_float(snapshot.get("adx"), 0.0)
+    min_adx = _safe_float(snapshot.get("min_adx"), 18.0)
+    vol_ratio = _safe_float(snapshot.get("vol_ratio", snapshot.get("volume_ratio")), 0.0)
+    min_volume_ratio = _safe_float(snapshot.get("min_volume_ratio"), 0.9)
+    rsi = _safe_float(snapshot.get("rsi"), 50.0)
+    candidate_side = str(snapshot.get("candidate_side", action) or action).upper()
+    trend_5m = str(snapshot.get("trend_5m", "sideways") or "sideways").lower()
+    trend_15m = str(snapshot.get("trend_15m", "sideways") or "sideways").lower()
+    trend_1h = str(snapshot.get("trend_1h", "sideways") or "sideways").lower()
+    expected_trend = "bullish" if action == "BUY" else "bearish"
+    aligned_tfs = sum(1 for value in (trend_5m, trend_15m, trend_1h) if value == expected_trend)
+
+    if candidate_side in {"BUY", "SELL"} and action != candidate_side:
+        return _block_trade(f"quality-gate: AI side {action} beda dengan setup {candidate_side}")
+    if score < min_score:
+        return _block_trade(f"quality-gate: score {score:.1f} di bawah minimum {min_score:.1f}")
+    if confidence < min_confidence:
+        return _block_trade(f"quality-gate: confidence {confidence:.2f} di bawah minimum {min_confidence:.2f}")
+    if rr_ratio < min_rr:
+        return _block_trade(f"quality-gate: RR {rr_ratio:.2f} di bawah minimum {min_rr:.2f}")
+    if adx_val < min_adx:
+        return _block_trade(f"quality-gate: ADX {adx_val:.2f} di bawah minimum {min_adx:.2f}")
+    if vol_ratio < min_volume_ratio:
+        return _block_trade(f"quality-gate: volume ratio x{vol_ratio:.2f} di bawah minimum x{min_volume_ratio:.2f}")
+    if aligned_tfs < 2:
+        return _block_trade(f"quality-gate: trend alignment kurang ({aligned_tfs}/3 timeframe)")
+    if action == "BUY" and not 42 <= rsi <= 66:
+        return _block_trade(f"quality-gate: RSI BUY {rsi:.1f} di luar zona sehat 42-66")
+    if action == "SELL" and not 34 <= rsi <= 58:
+        return _block_trade(f"quality-gate: RSI SELL {rsi:.1f} di luar zona sehat 34-58")
+
+    return {}
+
 
 def _heuristic_decision(snapshot: Dict[str, Any]) -> Dict[str, Any]:
     score = _safe_float(snapshot.get("score"), 0.0)
@@ -301,7 +352,7 @@ def _heuristic_decision(snapshot: Dict[str, Any]) -> Dict[str, Any]:
         elif confidence >= 0.65:
             suggested_risk_percent = 0.6
 
-    return {
+    decision = {
         "provider": "local-heuristic",
         "mode": "enhanced",
         "allow_trade": allow_trade,
@@ -323,6 +374,11 @@ def _heuristic_decision(snapshot: Dict[str, Any]) -> Dict[str, Any]:
             f"conf={confidence:.2f}"
         ),
     }
+    gate = _quality_gate(snapshot, decision)
+    if gate:
+        decision.update(gate)
+        decision["reason"] = f"{decision['reason']}; {gate['quality_gate_reason']}"
+    return decision
 
 
 def _normalize_decision(data: Dict[str, Any], snapshot: Dict[str, Any], provider: str, mode: str) -> Dict[str, Any]:
@@ -341,7 +397,7 @@ def _normalize_decision(data: Dict[str, Any], snapshot: Dict[str, Any], provider
     confidence = _safe_float(data.get("confidence"), fallback["confidence"])
     confidence = max(0.05, min(confidence, 0.95))
 
-    return {
+    decision = {
         "provider": provider,
         "mode": mode,
         "allow_trade": bool(data.get("allow_trade", fallback["allow_trade"])),
@@ -365,6 +421,11 @@ def _normalize_decision(data: Dict[str, Any], snapshot: Dict[str, Any], provider
         ).upper(),
         "reason": str(data.get("reason", fallback["reason"]) or fallback["reason"]),
     }
+    gate = _quality_gate(snapshot, decision)
+    if gate:
+        decision.update(gate)
+        decision["reason"] = f"{decision['reason']}; {gate['quality_gate_reason']}"
+    return decision
 
 
 def _build_prompt(snapshot: Dict[str, Any]) -> str:

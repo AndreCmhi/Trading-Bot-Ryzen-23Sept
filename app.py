@@ -7,6 +7,7 @@ import os
 import secrets
 import socket
 import threading
+import time
 import requests
 import requests
 def send_telegram_msg(msg):
@@ -92,6 +93,7 @@ from enhanced_risk import calculate_kelly_criterion, calculate_daily_loss_limit,
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATE_DIR = BASE_DIR / "Templates"
 DATA_FILE = BASE_DIR / "trades.json"
+TESTNET_SHADOW_POSITIONS_FILE = BASE_DIR / "testnet_shadow_positions.json"
 MANUAL_ROI_FILE = BASE_DIR / "manual_roi.json"
 MANUAL_TP_SL_FILE = BASE_DIR / "manual_tp_sl.json"
 AI_DECISIONS_FILE = BASE_DIR / "ai_decisions.json"
@@ -100,6 +102,7 @@ COOLDOWN = int(os.getenv("COOLDOWN", "15"))
 SCAN_INTERVAL = int(os.getenv("SCAN_INTERVAL", "60"))
 DEFAULT_LEVERAGE = 5
 DEFAULT_FIXED_TRADE_NOTIONAL_USDT = float(os.getenv("DEFAULT_FIXED_TRADE_NOTIONAL_USDT", "3.0"))
+DEFAULT_ACTIVE_MARGIN_BALANCE_PERCENT = float(os.getenv("DEFAULT_ACTIVE_MARGIN_BALANCE_PERCENT", "25.0"))
 DEFAULT_RISK_PER_TRADE_PERCENT = float(os.getenv("DEFAULT_RISK_PER_TRADE_PERCENT", "1.0"))
 FEE_BUFFER_FACTOR = float(os.getenv("FEE_BUFFER_FACTOR", "1.5"))
 MAX_RISK_PER_TRADE_PERCENT = float(os.getenv("MAX_RISK_PER_TRADE_PERCENT", "2.0"))
@@ -146,6 +149,7 @@ AUTO_CLOSE_ENABLED = os.getenv("AUTO_CLOSE_ENABLED", "true").lower() == "true"
 AUTO_CLOSE_ROI_PERCENT = float(os.getenv("AUTO_CLOSE_ROI_PERCENT", "3.0"))
 MAX_ALLOWED_ATR_PERCENT = float(os.getenv("MAX_ALLOWED_ATR_PERCENT", "1.8"))
 TOP_SYMBOL_LIMIT = int(os.getenv("TOP_SYMBOL_LIMIT", "20"))
+SCAN_CANDIDATE_POOL_LIMIT = int(os.getenv("SCAN_CANDIDATE_POOL_LIMIT", "120"))
 SYMBOL_RANK_REFRESH_SECONDS = int(os.getenv("SYMBOL_RANK_REFRESH_SECONDS", "900"))
 MAX_ALLOWED_FUNDING_RATE = float(os.getenv("MAX_ALLOWED_FUNDING_RATE", "0.0008"))
 PULLBACK_DISTANCE_PERCENT = float(os.getenv("PULLBACK_DISTANCE_PERCENT", "0.35"))
@@ -199,12 +203,15 @@ for _init_attempt in range(10):
             requests_params={"timeout": 20},
             ping=False,
         )
+        if config.TESTNET:
+            client.FUTURES_URL = "https://testnet.binancefuture.com/fapi"
+            client.FUTURES_DATA_URL = "https://testnet.binancefuture.com/futures/data"
         # Monkey patch get_server_time to use futures endpoint since spot testnet is 502
+        server_time_session = requests.Session()
         def custom_get_server_time():
-            import requests
             url = "https://testnet.binancefuture.com/fapi/v1/time" if config.TESTNET else "https://fapi.binance.com/fapi/v1/time"
             try:
-                res = requests.get(url, timeout=5)
+                res = server_time_session.get(url, timeout=5)
                 res.raise_for_status()
                 return res.json()
             except Exception as e:
@@ -365,7 +372,7 @@ STRATEGY_PROFILES = {
     },
     "TARGET_75": {
         "min_score": 9,
-        "ai_min_confidence": 0.76,
+        "ai_min_confidence": 0.78,
         "pullback_distance_percent": 0.22,
         "entry_breakout_buffer_percent": 0.06,
         "min_ema_slope_5m": 0.03,
@@ -375,10 +382,10 @@ STRATEGY_PROFILES = {
         "buy_rsi_max": 60,
         "sell_rsi_min": 40,
         "sell_rsi_max": 50,
-        "auto_close_roi_percent": 80.0,
+        "auto_close_roi_percent": 2.5,
         "partial_tp_factor": 0.5,
-        "breakeven_buffer": 1.1,
-        "trailing_trigger_bonus": 4.0,
+        "breakeven_buffer": 0.45,
+        "trailing_trigger_bonus": 0.2,
         "trailing_floor_factor": 0.6,
         "high_target_mode": True,
     },
@@ -716,7 +723,8 @@ def load_exchange_filters():
 def build_ranked_scan_symbols(discovered_symbols):
     blocked_symbols = get_blocked_symbols()
     if UNRESTRICTED_SCAN_UNIVERSE:
-        return [symbol for symbol in discovered_symbols if symbol not in blocked_symbols]
+        pool_limit = max(TOP_SYMBOL_LIMIT, SCAN_CANDIDATE_POOL_LIMIT)
+        return [symbol for symbol in discovered_symbols if symbol not in blocked_symbols][:pool_limit]
 
     if SYMBOL_SCAN_MODE != "ALL":
         configured = getattr(config, "SYMBOLS", []) or []
@@ -842,6 +850,7 @@ def get_default_settings():
         "trading_style": normalize_trading_style(DEFAULT_TRADING_STYLE),
         "risk_per_trade_percent": DEFAULT_RISK_PER_TRADE_PERCENT,
         "max_risk_per_trade_percent": MAX_RISK_PER_TRADE_PERCENT,
+        "active_margin_balance_percent": DEFAULT_ACTIVE_MARGIN_BALANCE_PERCENT,
         "fixed_trade_notional_usdt": DEFAULT_FIXED_TRADE_NOTIONAL_USDT,
         "min_trade_notional_usdt": 5.0,
         "min_transaksi": 1,
@@ -859,6 +868,7 @@ def get_default_settings():
         "min_score": int(getattr(config, "MIN_SCORE", 3) or 3),
         "max_open_positions": MAX_OPEN_POSITIONS,
         "max_daily_loss_usdt": MAX_DAILY_LOSS_USDT,
+        "hard_daily_loss_multiplier": 2.5,
         "max_consecutive_losses": MAX_CONSECUTIVE_LOSSES,
         "max_trades_per_hour": MAX_TRADES_PER_HOUR,
         "max_losses_per_hour": MAX_LOSSES_PER_HOUR,
@@ -1005,12 +1015,31 @@ def rebuild_auto_blacklist():
 
 
 def write_json_atomic(path_obj, data):
-    tmp_path = path_obj.with_suffix(path_obj.suffix + ".tmp")
-    with tmp_path.open("w", encoding="utf-8") as file:
-        json.dump(data, file, indent=4)
-        file.flush()
-        os.fsync(file.fileno())
-    os.replace(tmp_path, path_obj)
+    tmp_path = path_obj.with_suffix(
+        f"{path_obj.suffix}.{os.getpid()}.{threading.get_ident()}.tmp"
+    )
+    try:
+        with tmp_path.open("w", encoding="utf-8") as file:
+            json.dump(data, file, indent=4)
+            file.flush()
+            os.fsync(file.fileno())
+
+        last_error = None
+        for _ in range(5):
+            try:
+                os.replace(tmp_path, path_obj)
+                return
+            except PermissionError as exc:
+                last_error = exc
+                time.sleep(0.1)
+        if last_error:
+            raise last_error
+    finally:
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
 
 
 def save_runtime_settings(data):
@@ -1036,6 +1065,49 @@ def update_runtime_settings(new_values):
         snapshot = dict(runtime_settings)
         write_json_atomic(SETTINGS_FILE, snapshot)
     return snapshot
+
+
+def load_testnet_shadow_positions():
+    if not config.TESTNET or not TESTNET_SHADOW_POSITIONS_FILE.exists():
+        return {}
+    try:
+        with TESTNET_SHADOW_POSITIONS_FILE.open("r", encoding="utf-8") as file:
+            data = json.load(file)
+            return data if isinstance(data, dict) else {}
+    except (json.JSONDecodeError, OSError) as exc:
+        print(f"LOAD TESTNET SHADOW POSITIONS ERROR: {exc}")
+        return {}
+
+
+def save_testnet_shadow_positions(data):
+    if not config.TESTNET:
+        return
+    write_json_atomic(TESTNET_SHADOW_POSITIONS_FILE, data)
+
+
+def get_testnet_shadow_position(symbol):
+    return load_testnet_shadow_positions().get(str(symbol or "").upper())
+
+
+def put_testnet_shadow_position(position):
+    if not config.TESTNET:
+        return
+    symbol = str(position.get("symbol", "") or "").upper()
+    if not symbol:
+        return
+    data = load_testnet_shadow_positions()
+    data[symbol] = position
+    save_testnet_shadow_positions(data)
+
+
+def remove_testnet_shadow_position(symbol):
+    if not config.TESTNET:
+        return False
+    data = load_testnet_shadow_positions()
+    removed = data.pop(str(symbol or "").upper(), None) is not None
+    if removed:
+        save_testnet_shadow_positions(data)
+    return removed
 
 def load_manual_roi():
     with manual_roi_lock:
@@ -1285,6 +1357,63 @@ def sync_closed_trades():
     if not trades:
         return trades
 
+    try:
+        current_positions = get_current_positions()
+    except Exception as exc:
+        print("Error getting current positions for sync_closed_trades:", exc)
+        return trades
+
+    live_symbols = {position.get("symbol") for position in current_positions}
+    symbols_to_sync = []
+    for trade in trades:
+        if trade.get("status") == "OPEN":
+            symbol = trade.get("symbol")
+            if symbol not in live_symbols and symbol not in symbols_to_sync:
+                symbols_to_sync.append(symbol)
+
+    if not symbols_to_sync:
+        return trades
+
+    sync_results = {}
+    for symbol in symbols_to_sync:
+        open_time = None
+        for t in trades:
+            if t.get("symbol") == symbol and t.get("status") == "OPEN":
+                open_time = t.get("time")
+                break
+        realized_pnl, closed_time = get_realized_pnl_for_trade(symbol, open_time)
+        if realized_pnl == 0.0 and closed_time is None:
+            retry_pnl, retry_time = get_realized_pnl_for_trade(symbol)
+            if retry_pnl != 0.0 or retry_time is not None:
+                realized_pnl = retry_pnl
+                closed_time = retry_time
+        sync_results[symbol] = {
+            "pnl": realized_pnl,
+            "closed_time": closed_time
+        }
+
+    with trades_lock:
+        fresh_trades = load_trades()
+        updated = False
+        for trade in fresh_trades:
+            if trade.get("status") == "OPEN":
+                sym = trade.get("symbol")
+                if sym in sync_results:
+                    res = sync_results[sym]
+                    trade["pnl"] = res["pnl"]
+                    trade["status"] = "CLOSED"
+                    trade["close_reason"] = trade.get("close_reason") or "SYNC_CLOSE"
+                    trade["closed_time"] = res["closed_time"]
+                    trade["close_price"] = round(float(trade.get("close_price", 0) or 0), 4)
+                    msg = f"Trade Closed: {sym} | PnL: {res['pnl']:.2f} | Reason: {trade.get('close_reason', '-')}"
+                    send_telegram_msg(msg)
+                    updated = True
+        if updated:
+            fresh_trades.sort(key=get_trade_reference_datetime)
+            write_json_atomic(DATA_FILE, fresh_trades)
+            return fresh_trades
+    return load_trades()
+
     live_symbols = {position.get("symbol") for position in get_current_positions()}
     updated = False
 
@@ -1493,6 +1622,9 @@ def calculate_stats():
         "open_breakeven_trades": open_breakeven_count,
         "total_open_margin": round(total_open_margin, 2),
         "margin_balance": round(margin_balance, 2),
+        "active_margin_balance_percent": float(
+            settings.get("active_margin_balance_percent", DEFAULT_ACTIVE_MARGIN_BALANCE_PERCENT)
+        ),
     }
 
 
@@ -2090,6 +2222,17 @@ def build_close_order_params(position, quantity, side):
 def get_current_positions():
     try:
         positions = call_binance("futures_position_information")
+        if config.TESTNET:
+            shadow_positions = list(load_testnet_shadow_positions().values())
+            live_symbols = {
+                str(pos.get("symbol", "") or "").upper()
+                for pos in positions
+                if float(pos.get("positionAmt", 0) or 0) != 0
+            }
+            positions.extend(
+                pos for pos in shadow_positions
+                if str(pos.get("symbol", "") or "").upper() not in live_symbols
+            )
         active_symbols = {pos["symbol"] for pos in positions if float(pos.get("positionAmt", 0)) != 0}
         
         account_leverages = {}
@@ -2307,8 +2450,15 @@ def get_market_confirmation_snapshot(closes, volumes):
     ema50 = calculate_ema(closes, 50)
     vwap = calculate_vwap(closes, volumes) if volumes else 0.0
     adx = calculate_adx(closes, 14)
-    avg_volume = sum(volumes) / len(volumes) if volumes else 0.0
-    volume_ratio = (volumes[-1] / avg_volume) if avg_volume > 0 and volumes else 0.0
+    nonzero_volumes = [volume for volume in volumes if volume > 0]
+    if len(nonzero_volumes) >= 2:
+        latest_volume = nonzero_volumes[-1]
+        baseline_volumes = nonzero_volumes[-21:-1] if len(nonzero_volumes) > 21 else nonzero_volumes[:-1]
+        avg_volume = sum(baseline_volumes) / len(baseline_volumes) if baseline_volumes else 0.0
+    else:
+        latest_volume = 0.0
+        avg_volume = 0.0
+    volume_ratio = (latest_volume / avg_volume) if avg_volume > 0 else 0.0
 
     return {
         "vwap": round(float(vwap), 8),
@@ -2429,6 +2579,20 @@ def evaluate_strategy_setup(symbol):
     price_above_vwap = bool(confirmation["price_above_vwap"])
     price_above_ema20 = bool(confirmation["price_above_ema20"])
     price_above_ema50 = bool(confirmation["price_above_ema50"])
+
+    min_adx = float(settings.get("min_adx", 0.8))
+    min_volume_ratio = float(settings.get("min_volume_ratio", 0.6))
+    if not TEST_MINIMUM_TRADING_MODE and adx < min_adx:
+        return {
+            "allowed": False,
+            "reason": f"ADX {adx:.2f} di bawah minimum {min_adx:.2f}; trend terlalu lemah untuk scalping.",
+        }
+
+    if not TEST_MINIMUM_TRADING_MODE and volume_ratio < min_volume_ratio:
+        return {
+            "allowed": False,
+            "reason": f"Volume ratio x{volume_ratio:.2f} di bawah minimum x{min_volume_ratio:.2f}; likuiditas/momentum terlalu lemah.",
+        }
 
     if not disable_trend_filter and trend_1h == "mixed":
         return {
@@ -2717,6 +2881,13 @@ def evaluate_ai_trade(symbol, score, rsi, closes, setup=None, balance=0.0, setti
         "recent_strategy_stats": performance_context.get("by_strategy", {}),
         "adaptive_pauses": performance_context.get("adaptive_pauses", {}),
         "recent_pattern_stats": performance_context.get("patterns", {}),
+        "min_score": max(
+            int(settings.get("min_score", getattr(config, "MIN_SCORE", 3) or 3)),
+            int(profile.get("min_score", 0) or 0),
+        ),
+        "ai_min_confidence": max(AI_MIN_CONFIDENCE, float(profile["ai_min_confidence"])),
+        "min_adx": float(settings.get("min_adx", 18.0)),
+        "min_volume_ratio": float(settings.get("min_volume_ratio", 0.9)),
     }
     if setup:
         extras.update(
@@ -2755,6 +2926,12 @@ def evaluate_ai_trade(symbol, score, rsi, closes, setup=None, balance=0.0, setti
             4,
         )
     decision["checked_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    # Inject indicator data for dashboard
+    decision['rsi'] = rsi
+    decision['adx'] = round(float(snapshot.get('adx', 0) or 0), 4)
+    decision['volume_ratio'] = round(float(snapshot.get('volume_ratio', 0) or 0), 4)
+    decision['confirmation_score'] = int(decision.get('confirmation_score', 0) or 0)
+    
     return decision
 
 
@@ -2803,6 +2980,7 @@ def get_ai_status_payload():
         "min_score": int(settings.get("min_score", getattr(config, "MIN_SCORE", 3) or 3)),
         "max_open_positions": int(settings.get("max_open_positions", MAX_OPEN_POSITIONS)),
         "max_daily_loss_usdt": float(settings.get("max_daily_loss_usdt", MAX_DAILY_LOSS_USDT)),
+        "hard_daily_loss_multiplier": float(settings.get("hard_daily_loss_multiplier", 2.5)),
         "max_consecutive_losses": int(settings.get("max_consecutive_losses", MAX_CONSECUTIVE_LOSSES)),
         "max_trades_per_hour": int(settings.get("max_trades_per_hour", MAX_TRADES_PER_HOUR)),
         "max_losses_per_hour": int(settings.get("max_losses_per_hour", MAX_LOSSES_PER_HOUR)),
@@ -2848,6 +3026,9 @@ def get_ai_status_payload():
         "fixed_trade_notional_usdt": float(
             settings.get("fixed_trade_notional_usdt", DEFAULT_FIXED_TRADE_NOTIONAL_USDT)
         ),
+        "active_margin_balance_percent": float(
+            settings.get("active_margin_balance_percent", DEFAULT_ACTIVE_MARGIN_BALANCE_PERCENT)
+        ),
         "top_symbol_limit": TOP_SYMBOL_LIMIT,
         "max_allowed_atr_percent": MAX_ALLOWED_ATR_PERCENT,
         "max_allowed_funding_rate": MAX_ALLOWED_FUNDING_RATE,
@@ -2871,6 +3052,116 @@ def get_ai_status_payload():
         "ollama_configured": provider_status.get("ollama_configured"),
         "fallback_chain": provider_status.get("fallback_chain"),
         "effective_ai_min_confidence": AI_MIN_CONFIDENCE,
+    }
+
+
+def build_dashboard_health(stats, ai_status, history_monitor, positions):
+    recent_pnl = safe_float(history_monitor.get("recent_pnl", 0))
+    recent_winrate = safe_float(history_monitor.get("recent_winrate", 0))
+    hard_stop_rate = safe_float(history_monitor.get("recent_hard_stop_rate", 0))
+    profit_leaks = int(history_monitor.get("recent_profit_leaks", 0) or 0)
+    consecutive_losses = int(stats.get("consecutive_losses", 0) or 0)
+    max_open = max(int(ai_status.get("max_open_positions", 1) or 1), 1)
+    open_count = len(positions)
+    open_pressure = min(open_count / max_open, 1.0)
+    open_pnl = sum(safe_float(position.get("pnl", 0)) for position in positions)
+
+    score = 100
+    if recent_winrate and recent_winrate < 55:
+        score -= min((55 - recent_winrate) * 0.8, 28)
+    if recent_pnl < 0:
+        score -= min(abs(recent_pnl) * 6, 26)
+    score -= min(hard_stop_rate * 35, 18)
+    score -= min(consecutive_losses * 7, 21)
+    score -= min(profit_leaks * 3, 12)
+    if open_pnl < 0:
+        score -= min(abs(open_pnl) * 4, 18)
+    if open_pressure >= 0.9:
+        score -= 8
+    score = max(0, min(100, round(score, 1)))
+
+    if score >= 75:
+        label = "STABLE"
+        tone = "success"
+        summary = "Kondisi bot sehat. Pertahankan mode dan jaga exposure."
+    elif score >= 50:
+        label = "WATCH"
+        tone = "warning"
+        summary = "Performa campuran. Pantau entry, hard stop, dan posisi terbuka."
+    else:
+        label = "DEFENSIVE"
+        tone = "danger"
+        summary = "Risiko naik. Pertimbangkan mode precision, min score lebih tinggi, atau pause sementara."
+
+    return {
+        "score": score,
+        "label": label,
+        "tone": tone,
+        "summary": summary,
+        "open_pressure_percent": round(open_pressure * 100, 1),
+        "open_pnl": round(open_pnl, 2),
+        "recent_pnl": round(recent_pnl, 2),
+        "recent_winrate": round(recent_winrate, 2),
+        "hard_stop_rate_percent": round(hard_stop_rate * 100, 2),
+        "profit_leaks": profit_leaks,
+    }
+
+
+def build_dashboard_snapshot_payload(include_sparklines=True):
+    stats = calculate_stats()
+    positions = get_current_positions()
+    if include_sparklines:
+        for position in positions:
+            try:
+                position["sparkline"] = get_klines(position["symbol"], interval="15m", limit=20)
+            except Exception:
+                position["sparkline"] = []
+
+    ai_status_payload = get_ai_status_payload()
+    history_monitor_payload = refresh_trade_history_monitor()
+    bot_status_payload = get_bot_status_payload()
+    guard_state = ai_status_payload.get("risk_guard_state", {}) or {}
+    settings = get_runtime_settings()
+    total_margin = sum(safe_float(position.get("margin", 0)) for position in positions)
+    total_open_pnl = sum(safe_float(position.get("pnl", 0)) for position in positions)
+    margin_balance = safe_float(stats.get("margin_balance", 0))
+    margin_usage = round((total_margin / margin_balance) * 100, 2) if margin_balance > 0 else 0.0
+
+    recent_trades = sorted(
+        [trade for trade in load_trades() if trade.get("status") == "CLOSED"],
+        key=get_trade_reference_datetime,
+        reverse=True,
+    )[:12]
+
+    return {
+        "bot_status": bot_status_payload,
+        "stats": stats,
+        "ai_status": ai_status_payload,
+        "history_monitor": history_monitor_payload,
+        "risk_guard": guard_state,
+        "market_regime": get_market_regime_state(),
+        "health": build_dashboard_health(stats, ai_status_payload, history_monitor_payload, positions),
+        "open_positions": positions,
+        "recent_trades": recent_trades,
+        "exposure": {
+            "total_margin": round(total_margin, 2),
+            "total_open_pnl": round(total_open_pnl, 2),
+            "margin_usage_percent": margin_usage,
+            "max_open_positions": int(ai_status_payload.get("max_open_positions", settings.get("max_open_positions", MAX_OPEN_POSITIONS)) or 0),
+            "active_margin_balance_percent": safe_float(settings.get("active_margin_balance_percent", DEFAULT_ACTIVE_MARGIN_BALANCE_PERCENT)),
+        },
+        "controls": {
+            "strategy_mode": ai_status_payload.get("strategy_mode"),
+            "trading_style": ai_status_payload.get("trading_style"),
+            "ai_enabled": bool(ai_status_payload.get("enabled")),
+            "risk_guard_enabled": bool(ai_status_payload.get("risk_guard_enabled")),
+            "auto_close_enabled": bool(ai_status_payload.get("auto_close_enabled")),
+            "auto_blacklist_enabled": bool(ai_status_payload.get("auto_blacklist_enabled")),
+            "default_leverage": ai_status_payload.get("default_leverage"),
+            "min_score": ai_status_payload.get("min_score"),
+            "min_confidence": ai_status_payload.get("profile_ai_min_confidence"),
+        },
+        "time": datetime.now().strftime("%H:%M:%S"),
     }
 
 
@@ -2958,10 +3249,18 @@ def build_order_plan(symbol, balance, price, leverage, ai_decision=None, setting
             "reason": "Mode uji: qty dipaksa ke nominal minimum exchange.",
         }
 
-    fixed_trade_notional_margin = float(
+    configured_trade_margin = float(
         settings.get("fixed_trade_notional_usdt", DEFAULT_FIXED_TRADE_NOTIONAL_USDT)
         or DEFAULT_FIXED_TRADE_NOTIONAL_USDT
     )
+    active_margin_balance_percent = max(
+        float(settings.get("active_margin_balance_percent", DEFAULT_ACTIVE_MARGIN_BALANCE_PERCENT) or 0.0),
+        0.0,
+    )
+    max_open_positions = max(int(settings.get("max_open_positions", MAX_OPEN_POSITIONS) or MAX_OPEN_POSITIONS), 1)
+    active_margin_limit = max(balance, 0) * (active_margin_balance_percent / 100.0)
+    balance_based_trade_margin = active_margin_limit / max_open_positions if active_margin_limit > 0 else 0.0
+    fixed_trade_notional_margin = balance_based_trade_margin if balance_based_trade_margin > 0 else configured_trade_margin
     fixed_trade_notional_margin = max(round(fixed_trade_notional_margin, 4), 0.0)
     min_trade_notional_margin = float(settings.get("min_trade_notional_usdt", 5.0))
     fixed_trade_notional_margin = max(fixed_trade_notional_margin, min_trade_notional_margin)
@@ -3066,7 +3365,9 @@ def build_order_plan(symbol, balance, price, leverage, ai_decision=None, setting
         "risk_reward_ratio": round(risk_reward_ratio, 4),
         "position_notional": round(final_notional, 4),
         "margin_required": round(final_notional / leverage, 4) if leverage > 0 else 0.0,
-        "reason": "Position sizing fixed notional per transaksi baru.",
+        "active_margin_balance_percent": round(active_margin_balance_percent, 4),
+        "active_margin_limit": round(active_margin_limit, 4),
+        "reason": "Position sizing 25% margin balance aktif dibagi jumlah posisi maksimal.",
     }
 
 
@@ -3088,6 +3389,8 @@ def get_open_position(symbol):
             amt = float(position.get("positionAmt", 0))
             if amt != 0:
                 return position
+        if config.TESTNET:
+            return get_testnet_shadow_position(symbol)
         return None
     except Exception as exc:
         print(f"Open position error {symbol}:", exc)
@@ -3124,15 +3427,15 @@ def update_trade_on_close(symbol, pnl, close_price, reason):
     for trade in reversed(trades):
         if trade.get("symbol") == symbol and trade.get("status") == "OPEN":
             trade["status"] = "CLOSED"
-        msg = f"Trade Closed: {symbol} | PnL: {realized_pnl:.2f} | Reason: {trade.get("close_reason", "-")}"
-        send_telegram_msg(msg)
-        trade["pnl"] = round(float(pnl), 2)
-        trade["close_price"] = round(float(close_price), 4)
-        trade["close_reason"] = reason
-        trade["closed_time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        trades.sort(key=get_trade_reference_datetime)
-        save_trades(trades)
-        return trade
+            trade["pnl"] = round(float(pnl), 2)
+            trade["close_price"] = round(float(close_price), 4)
+            trade["close_reason"] = reason
+            trade["closed_time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            msg = f"Trade Closed: {symbol} | PnL: {float(pnl):.2f} | Reason: {trade.get('close_reason', '-')}"
+            send_telegram_msg(msg)
+            trades.sort(key=get_trade_reference_datetime)
+            save_trades(trades)
+            return trade
     return None
 
 
@@ -3152,6 +3455,20 @@ def close_position(symbol, reason="MANUAL"):
         close_price = float(position.get("markPrice") or position.get("entryPrice") or 0)
 
         try:
+            if config.TESTNET and position.get("shadow"):
+                remove_testnet_shadow_position(symbol)
+                update_trade_on_close(symbol, pnl, close_price, reason)
+                emit_stats()
+                socketio.emit(
+                    "position_closed",
+                    {
+                        "symbol": symbol,
+                        "reason": reason,
+                        "pnl": round(pnl, 2),
+                        "closed_at": datetime.now().strftime("%H:%M:%S"),
+                    },
+                )
+                return True, f"Posisi testnet {symbol} berhasil ditutup."
             cancel_open_orders(symbol)
             call_binance("futures_create_order", **build_close_order_params(position, qty, side))
             update_trade_on_close(symbol, pnl, close_price, reason)
@@ -3425,8 +3742,10 @@ def execute_trade(symbol):
             print(f"EXPOSURE CAP SKIP {symbol}: sisi {side} sudah {side_counts.get(side, 0)} posisi aktif.")
             return
 
+        recovery_mode_buy_pause = bool(settings.get("recovery_mode_buy_pause", False))
         if (
-            side == "BUY" and int(overall_recent_bucket.get("count", 0) or 0) >= 6 and int(overall_recent_bucket.get("consecutive_losses", 0) or 0) >= 3
+            recovery_mode_buy_pause
+            and side == "BUY" and int(overall_recent_bucket.get("count", 0) or 0) >= 6 and int(overall_recent_bucket.get("consecutive_losses", 0) or 0) >= 3
             and int(current_open_positions or 0) >= 2
         ):
             print("RECOVERY MODE SKIP {}: loss beruntun recent, tahan BUY baru saat posisi aktif masih padat.".format(symbol))
@@ -3437,6 +3756,7 @@ def execute_trade(symbol):
             settings.get("preferred_margin_mode", DEFAULT_MARGIN_MODE)
         )
         guard_config = {
+            "trades": trades,
             "recent_closed_count": int(performance_context.get("overall", {}).get("count", 0) or 0),
             "recent_winrate": float(performance_context.get("overall", {}).get("winrate", 0.0) or 0.0),
             "recent_hard_stop_rate": float(performance_context.get("overall", {}).get("hard_stop_rate", 0.0) or 0.0),
@@ -3445,6 +3765,7 @@ def execute_trade(symbol):
             "buy_scalping_pause_active": adaptive_buy_scalping_pause,
             "max_open_positions": int(settings.get("max_open_positions", MAX_OPEN_POSITIONS)),
             "max_daily_loss_usdt": float(settings.get("max_daily_loss_usdt", MAX_DAILY_LOSS_USDT)),
+            "hard_daily_loss_multiplier": float(settings.get("hard_daily_loss_multiplier", 2.5)),
             "max_consecutive_losses": int(settings.get("max_consecutive_losses", MAX_CONSECUTIVE_LOSSES)),
             "max_trades_per_hour": int(settings.get("max_trades_per_hour", MAX_TRADES_PER_HOUR)),
             "max_losses_per_hour": int(settings.get("max_losses_per_hour", MAX_LOSSES_PER_HOUR)),
@@ -3496,8 +3817,11 @@ def execute_trade(symbol):
         # ENHANCED RISK: daily loss limit check
         total_daily_pnl = stats.get("total_pnl", 0.0)
         daily_loss_limit_usdt, _ = calculate_daily_loss_limit(balance)
-        if total_daily_pnl <= -daily_loss_limit_usdt:
-            print(f"DAILY LOSS LIMIT HIT {symbol}: PnL {total_daily_pnl:.2f} <= limit {-daily_loss_limit_usdt:.2f}, skip.")
+        configured_daily_limit = float(settings.get("max_daily_loss_usdt", daily_loss_limit_usdt) or daily_loss_limit_usdt)
+        hard_daily_multiplier = max(float(settings.get("hard_daily_loss_multiplier", 2.5) or 2.5), 1.0)
+        effective_daily_stop = max(daily_loss_limit_usdt, configured_daily_limit * hard_daily_multiplier)
+        if total_daily_pnl <= -effective_daily_stop:
+            print(f"DAILY LOSS HARD LIMIT {symbol}: PnL {total_daily_pnl:.2f} <= limit {-effective_daily_stop:.2f}, skip.")
             return
 
         # ENHANCED RISK: funding rate check
@@ -3583,6 +3907,43 @@ def execute_trade(symbol):
         qty = order_plan["qty"]
         entry = float(closes[-1])
         order = call_binance("futures_create_order", symbol=symbol, side=side, type="MARKET", quantity=qty)
+        print(
+            f"ORDER SUBMITTED {symbol}: id={order.get('orderId')} status={order.get('status')} "
+            f"executed={order.get('executedQty')} avg={order.get('avgPrice')}"
+        )
+        live_position = None
+        for _position_wait in range(10):
+            live_position = get_open_position(symbol)
+            if live_position:
+                break
+            time.sleep(0.5)
+        if not live_position:
+            if config.TESTNET and (float(order.get("executedQty", 0) or 0) > 0 or order.get("orderId") is not None):
+                shadow_position = {
+                    "symbol": symbol,
+                    "positionAmt": str(qty if side == "BUY" else -qty),
+                    "entryPrice": str(entry),
+                    "markPrice": str(entry),
+                    "unRealizedProfit": "0",
+                    "leverage": str(effective_leverage),
+                    "positionSide": "BOTH",
+                    "positionInitialMargin": str(round((qty * entry) / effective_leverage, 8)),
+                    "isolatedWallet": str(round((qty * entry) / effective_leverage, 8)),
+                    "marginType": preferred_margin_mode.lower(),
+                    "isolated": preferred_margin_mode == "ISOLATED",
+                    "updateTime": int(time.time() * 1000),
+                    "shadow": True,
+                }
+                put_testnet_shadow_position(shadow_position)
+                live_position = shadow_position
+            else:
+                print(f"ORDER NO POSITION {symbol}: market order did not create a visible open position, skip local OPEN record.")
+                last_trade_time[symbol] = now
+                return
+        if not live_position:
+            print(f"ORDER NO POSITION {symbol}: market order did not create a visible open position, skip local OPEN record.")
+            last_trade_time[symbol] = now
+            return
         entry = resolve_entry_price_from_exchange(symbol, fallback_price=entry)
         if entry <= 0:
             try:
@@ -3669,28 +4030,44 @@ def build_ranked_trade_candidates(symbols):
     ranked = []
     settings = get_runtime_settings()
     profile = get_strategy_profile(settings)
-    min_score = max(
-        int(settings.get("min_score", getattr(config, "MIN_SCORE", 3) or 3)),
-        int(profile.get("min_score", 0) or 0),
-    )
+    min_score = int(settings.get("min_score", profile.get("min_score", getattr(config, "MIN_SCORE", 3) or 3)) or 3)
+    diagnostics = {
+        "not_in_filters": 0,
+        "blocked": 0,
+        "open": 0,
+        "cooldown": 0,
+        "setup_blocked": 0,
+        "low_score": 0,
+        "errors": 0,
+    }
+    setup_reasons = {}
     for symbol in symbols:
         if symbol not in symbol_filters:
+            diagnostics["not_in_filters"] += 1
             continue
         if symbol in get_blocked_symbols():
+            diagnostics["blocked"] += 1
             continue
         if has_open_position(symbol):
+            diagnostics["open"] += 1
             continue
         if config.TESTNET and is_symbol_in_error_cooldown(symbol):
+            diagnostics["cooldown"] += 1
             continue
         try:
             setup = evaluate_strategy_setup(symbol)
         except Exception as exc:
+            diagnostics["errors"] += 1
             print(f"CANDIDATE ERROR {symbol}: {exc}")
             continue
         if not setup.get("allowed"):
+            diagnostics["setup_blocked"] += 1
+            reason = str(setup.get("reason", "unknown") or "unknown").split(";")[0]
+            setup_reasons[reason] = setup_reasons.get(reason, 0) + 1
             continue
         score = int(setup.get("score", 0) or 0)
         if score < min_score:
+            diagnostics["low_score"] += 1
             continue
         trend_alignment = sum(
             1 for key in ("trend_5m", "trend_15m", "trend_1h")
@@ -3704,6 +4081,13 @@ def build_ranked_trade_candidates(symbols):
             "trend_alignment": trend_alignment,
         })
     ranked.sort(key=lambda item: (item["score"], item["trend_alignment"], -item["rsi_distance"], -item["atr_percent"]), reverse=True)
+    if not ranked:
+        top_reasons = sorted(setup_reasons.items(), key=lambda item: item[1], reverse=True)[:3]
+        reason_text = " | ".join(f"{count}x {reason}" for reason, count in top_reasons) or "-"
+        print(
+            "SCAN DIAG: "
+            f"symbols={len(symbols)} min_score={min_score} rejects={diagnostics} reasons={reason_text}"
+        )
     return [item["symbol"] for item in ranked]
 
 
@@ -4041,17 +4425,7 @@ def ai_decisions_api():
 @app.route("/api/dashboard_snapshot")
 @login_required
 def dashboard_snapshot_api():
-    stats = calculate_stats()
-    return jsonify(
-        {
-            "bot_status": get_bot_status_payload(),
-            "stats": stats,
-            "ai_status": get_ai_status_payload(),
-            "history_monitor": refresh_trade_history_monitor(),
-            "open_positions": get_current_positions(),
-            "time": datetime.now().strftime("%H:%M:%S"),
-        }
-    )
+    return jsonify(build_dashboard_snapshot_payload())
 
 
 @app.route("/api/history_monitor")
@@ -4089,6 +4463,12 @@ def update_settings_api():
             payload.get(
                 "max_risk_per_trade_percent",
                 current_settings.get("max_risk_per_trade_percent", MAX_RISK_PER_TRADE_PERCENT),
+            )
+        )
+        active_margin_balance_percent = float(
+            payload.get(
+                "active_margin_balance_percent",
+                current_settings.get("active_margin_balance_percent", DEFAULT_ACTIVE_MARGIN_BALANCE_PERCENT),
             )
         )
         fixed_trade_notional_usdt = float(
@@ -4151,6 +4531,9 @@ def update_settings_api():
         )
         max_daily_loss_usdt = float(
             payload.get("max_daily_loss_usdt", current_settings.get("max_daily_loss_usdt", MAX_DAILY_LOSS_USDT))
+        )
+        hard_daily_loss_multiplier = float(
+            payload.get("hard_daily_loss_multiplier", current_settings.get("hard_daily_loss_multiplier", 2.5))
         )
         max_consecutive_losses = int(
             payload.get("max_consecutive_losses", current_settings.get("max_consecutive_losses", MAX_CONSECUTIVE_LOSSES))
@@ -4224,6 +4607,8 @@ def update_settings_api():
         return jsonify({"status": "error", "message": "Batas maksimum risk per trade harus di antara 0 dan 2 persen."}), 400
     if risk_per_trade_percent > max_risk_per_trade_percent:
         return jsonify({"status": "error", "message": "Risk per trade tidak boleh melebihi batas maksimum risk."}), 400
+    if not 0 < active_margin_balance_percent <= 95:
+        return jsonify({"status": "error", "message": "Margin aktif harus di antara 0 dan 95 persen dari margin balance."}), 400
     if fixed_trade_notional_usdt <= 0:
         return jsonify({"status": "error", "message": "Fixed trade notional harus lebih besar dari 0."}), 400
     if min_risk_reward_ratio < 1:
@@ -4244,6 +4629,8 @@ def update_settings_api():
         return jsonify({"status": "error", "message": "Batas open position harus lebih besar dari 0."}), 400
     if max_daily_loss_usdt <= 0:
         return jsonify({"status": "error", "message": "Daily loss harus lebih besar dari 0."}), 400
+    if hard_daily_loss_multiplier < 1:
+        return jsonify({"status": "error", "message": "Hard daily loss multiplier minimal 1."}), 400
     if max_consecutive_losses <= 0:
         return jsonify({"status": "error", "message": "Loss beruntun harus lebih besar dari 0."}), 400
     if max_trades_per_hour <= 0:
@@ -4272,6 +4659,7 @@ def update_settings_api():
             "trading_style": trading_style,
             "risk_per_trade_percent": round(risk_per_trade_percent, 4),
             "max_risk_per_trade_percent": round(max_risk_per_trade_percent, 4),
+            "active_margin_balance_percent": round(active_margin_balance_percent, 4),
             "fixed_trade_notional_usdt": round(fixed_trade_notional_usdt, 4),
             "min_trade_notional_usdt": round(min_trade_notional_usdt, 4),
             "min_transaksi": int(payload.get("min_transaksi", current_settings.get("min_transaksi", 1))),
@@ -4290,6 +4678,7 @@ def update_settings_api():
             "min_score": min_score,
             "max_open_positions": max_open_positions,
             "max_daily_loss_usdt": round(max_daily_loss_usdt, 2),
+            "hard_daily_loss_multiplier": round(hard_daily_loss_multiplier, 2),
             "max_consecutive_losses": max_consecutive_losses,
             "max_trades_per_hour": max_trades_per_hour,
             "max_losses_per_hour": max_losses_per_hour,

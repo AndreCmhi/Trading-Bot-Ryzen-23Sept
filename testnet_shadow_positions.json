@@ -1,0 +1,17 @@
+{
+  "ETHUSDT": {
+    "symbol": "ETHUSDT",
+    "positionAmt": "0.1",
+    "entryPrice": "1718.74",
+    "markPrice": "1718.74",
+    "unRealizedProfit": "0",
+    "leverage": "3",
+    "positionSide": "BOTH",
+    "positionInitialMargin": "57.29133333",
+    "isolatedWallet": "57.29133333",
+    "marginType": "isolated",
+    "isolated": true,
+    "updateTime": 1781504156690,
+    "shadow": true
+  }
+}

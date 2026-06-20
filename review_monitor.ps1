@@ -121,8 +121,9 @@ while ($true) {
         break
     }
 
-    Start-Sleep -Seconds 1800
+    Start-Sleep -Seconds 900
 }
+
 
 
 

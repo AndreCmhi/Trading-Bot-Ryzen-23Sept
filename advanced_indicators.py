@@ -102,8 +102,16 @@ def calculate_vwap(prices, volumes):
     if not prices or not volumes or len(prices) != len(volumes):
         return 0.0
     
-    price_list = [float(p) for p in prices if p]
-    volume_list = [float(v) for v in volumes if v]
+    price_list = []
+    volume_list = []
+    for price, volume in zip(prices, volumes):
+        if price is None or volume is None:
+            continue
+        try:
+            price_list.append(float(price))
+            volume_list.append(max(float(volume), 0.0))
+        except (TypeError, ValueError):
+            continue
     
     if len(price_list) != len(volume_list) or not volume_list:
         return 0.0

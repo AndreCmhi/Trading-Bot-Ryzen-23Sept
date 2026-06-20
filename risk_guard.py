@@ -63,6 +63,7 @@ def evaluate_pre_trade(symbol, balance=None, open_positions=None, stats=None, co
     hourly_cutoff = now - timedelta(hours=1)
 
     max_daily_loss_usdt = max(_safe_float(cfg.get("max_daily_loss_usdt"), 25.0), 0.01)
+    hard_daily_loss_multiplier = max(_safe_float(cfg.get("hard_daily_loss_multiplier"), 2.5), 1.0)
     max_consecutive_losses = max(_safe_int(cfg.get("max_consecutive_losses"), 3), 1)
     max_trades_per_hour = max(_safe_int(cfg.get("max_trades_per_hour"), 6), 1)
     max_losses_per_hour = max(_safe_int(cfg.get("max_losses_per_hour"), 3), 1)
@@ -110,13 +111,31 @@ def evaluate_pre_trade(symbol, balance=None, open_positions=None, stats=None, co
         "leverage_cap": None,
     }
 
-    if daily_loss >= max_daily_loss_usdt:
+    if daily_loss >= (max_daily_loss_usdt * hard_daily_loss_multiplier):
         result.update({
             "allowed": False,
-            "policy": "halt",
-            "halt_bot": True,
+            "policy": "daily_loss_hard_stop",
+            "halt_bot": False,
             "risk_multiplier": 0.0,
-            "reason": f"Daily loss {daily_loss:.2f} USDT melewati batas {max_daily_loss_usdt:.2f} USDT.",
+            "reason": (
+                f"Daily loss {daily_loss:.2f} USDT melewati hard limit "
+                f"{(max_daily_loss_usdt * hard_daily_loss_multiplier):.2f} USDT. Entry ditahan tanpa auto-pause bot."
+            ),
+        })
+        return result
+
+    if daily_loss >= max_daily_loss_usdt:
+        result.update({
+            "allowed": True,
+            "policy": "daily_loss_recovery",
+            "halt_bot": False,
+            "risk_multiplier": 0.25,
+            "confidence_boost": 0.08,
+            "leverage_cap": 2,
+            "reason": (
+                f"Daily loss {daily_loss:.2f} USDT melewati soft limit {max_daily_loss_usdt:.2f} USDT. "
+                "Bot masuk recovery: size 25%, leverage max 2x, confidence wajib lebih tinggi."
+            ),
         })
         return result
 

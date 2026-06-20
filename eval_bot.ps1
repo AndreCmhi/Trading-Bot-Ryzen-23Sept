@@ -21,7 +21,7 @@ $botProc = $null
 # Method A: Cek Flask server via HTTP Ping
 $result = $null
 try {
-    $result = Invoke-WebRequest -Uri "http://127.0.0.1:5000/" -Method GET -TimeoutSec 5 -UseBasicParsing -ErrorAction Stop
+    $result = Invoke-WebRequest -Uri "http://127.0.0.1:5000/login" -Method GET -TimeoutSec 5 -UseBasicParsing -ErrorAction Stop
     if ($result.StatusCode -eq 200) { $botRunning = $true }
 } catch { }
 
@@ -46,7 +46,7 @@ if (-not $botRunning -or -not $botProc) {
     $retry = 0
     while ($retry -lt 3) {
         $retryRes = $null
-        try { $retryRes = Invoke-WebRequest -Uri "http://127.0.0.1:5000/" -Method GET -TimeoutSec 3 -UseBasicParsing -ErrorAction Stop } catch { }
+        try { $retryRes = Invoke-WebRequest -Uri "http://127.0.0.1:5000/login" -Method GET -TimeoutSec 3 -UseBasicParsing -ErrorAction Stop } catch { }
         if ($retryRes -and $retryRes.StatusCode -eq 200) { Write-Log "Bot restarted and reachable"; break }
         Start-Sleep 3
         $retry++
