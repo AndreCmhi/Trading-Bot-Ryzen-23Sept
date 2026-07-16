@@ -1,41 +1,42 @@
-import time
+﻿import time
 import state
+import config
 from datetime import datetime
 from shared import logger
-from exchange_logic import call_binance, close_position, get_klines
-from utils import get_runtime_settings, get_open_trade_record, update_open_trade_record
-from correlation_guard import check_correlation_risk
+from exchange_logic import call_binance, get_klines
+import strategy_entry as entry
+import risk_guard
 from constants import *
 
-def auto_scan_new():
-    print(f'[{datetime.now().strftime("%H:%M:%S")}] >>> SCANNING MARKET (MODULAR ENGINE)...')
-    # Di sini nanti memanggil fungsi execute_trade yang sudah di-refactor
-    pass
+def execute_confluence_trading():
+    symbols = config.SYMBOLS
+    for symbol in symbols:
+        try:
+            # 1. Fetch data
+            k1h = get_klines(symbol, interval='1h', limit=50)
+            k15m = get_klines(symbol, interval='15m', limit=20)
+            # Dummy volume logic (sebaiknya diupdate di exchange_logic)
+            v15m = [100] * 20 
 
-def auto_close_new():
-    print(f'[{datetime.now().strftime("%H:%M:%S")}] >>> MONITORING POSITIONS (HIGH-SPEED)...')
-    try:
-        positions = call_binance('futures_position_information')
-        active = [p for p in positions if float(p['positionAmt']) != 0]
-        
-        if not active:
-            return
-
-        for pos in active:
-            symbol = pos['symbol']
-            amt = float(pos['positionAmt'])
-            pnl = float(pos['unRealizedProfit'])
-            # Logika TP/SL presisi tinggi tanpa delay
-            # (Disederhanakan untuk percobaan pertama)
-            print(f'   - {symbol}: PnL {pnl}')
+            # 2. Check Strategy
+            decision = entry.check_confluence_entry(symbol, k1h, k15m, v15m)
             
-    except Exception as e:
-        print(f'Error in monitoring: {e}')
+            if decision['allow']:
+                # 3. Check Risk Guard
+                risk = risk_guard.evaluate_pre_trade(symbol, config=vars(config))
+                if not risk.get('allowed', True):
+                    print(f"Skipping {symbol}: {risk.get('reason')}")
+                    continue
+
+                print(f"TRADING {symbol}: {decision['side']} based on confluence score {decision['score']}")
+                # Logika pembukaan posisi Binance bisa ditambahkan di sini
+                
+        except Exception as e:
+            print(f"Error processing {symbol}: {e}")
 
 def run_engine_loop():
     state.init_client()
-    print('--- RYZEN BOT ENGINE READY ---')
+    print('--- RYZEN BOT ENGINE READY WITH CONFLUENCE ---')
     while True:
-        auto_close_new()
-        auto_scan_new()
-        time.sleep(SCAN_INTERVAL)
+        execute_confluence_trading()
+        time.sleep(60) # Scan setiap menit

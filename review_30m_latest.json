@@ -1,12 +1,12 @@
 ﻿{
-    "reviewed_at":  "2026-06-20 09:46:51",
+    "reviewed_at":  "2026-06-26 09:16:51",
     "bot":  "RUNNING",
     "running":  true,
-    "open_positions":  3,
-    "total_pnl":  -7.46,
-    "winrate":  33.33,
-    "recent_pnl":  -7.46,
-    "recent_winrate":  25,
+    "open_positions":  1,
+    "total_pnl":  11.16,
+    "winrate":  72.73,
+    "recent_pnl":  28.37,
+    "recent_winrate":  50,
     "error_lines":  [
 
                     ]

@@ -143,3 +143,19 @@ def is_exposure_safe(positions, new_trade_notional, balance, max_exposure_ratio=
     if balance <= 0: return {"allowed": False, "reason": "Saldo tidak cukup"}
     ratio = total_potential / balance
     return {"allowed": ratio <= max_exposure_ratio, "ratio": round(ratio, 2), "reason": f"Leverage total {ratio:.2f}x (Batas: {max_exposure_ratio}x)"}
+def calculate_atr_position_size(balance, risk_pct, price, atr, risk_reward=2.5):
+    """
+    Menghitung ukuran posisi berdasarkan volatilitas (ATR).
+    Rumus: Qty = (Balance * Risk%) / (ATR * Multiplier)
+    """
+    risk_amount = balance * (risk_pct / 100)
+    # Stop Loss biasanya 1.5x - 2x ATR
+    sl_distance = atr * 1.5
+    if sl_distance <= 0: return 0
+    
+    qty = risk_amount / sl_distance
+    return {
+        "qty": round(qty, 4),
+        "sl_price": round(price - sl_distance, 2), # Contoh untuk Long
+        "tp_price": round(price + (sl_distance * risk_reward), 2)
+    }

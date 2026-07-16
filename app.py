@@ -1,4 +1,4 @@
-from datetime import datetime
+﻿from datetime import datetime
 from functools import wraps
 import hmac
 import json
@@ -168,7 +168,7 @@ MANUAL_BLOCKED_SYMBOLS = {
     symbol.strip().upper()
     for symbol in os.getenv(
         "BLOCKED_SYMBOLS",
-        "BASUSDT,RABUSDT,LRCUSDT,LABUSDT,PORT3USDT,FISUSDT,FXSUSDT,PLAYUSDT,BCHUSDT,TOKENUSDT,Ã¥Â¸ÂÃ¥Â®â€°Ã¤ÂºÂºÃ§â€Å¸USDT,PONKEUSDT,TRBUSDT,SKYAIUSDT,SIRENUSDT,QUICKUSDT",
+        "BASUSDT,RABUSDT,LRCUSDT,LABUSDT,PORT3USDT,FISUSDT,FXSUSDT,PLAYUSDT,BCHUSDT,TOKENUSDT,ÃƒÂ¥Ã‚Â¸Ã‚ÂÃƒÂ¥Ã‚Â®Ã¢â‚¬Â°ÃƒÂ¤Ã‚ÂºÃ‚ÂºÃƒÂ§Ã¢â‚¬ÂÃ…Â¸USDT,PONKEUSDT,TRBUSDT,SKYAIUSDT,SIRENUSDT,QUICKUSDT",
     ).split(",")
     if symbol.strip()
 }
@@ -1184,6 +1184,11 @@ def ensure_open_trade_record(symbol, position=None):
     amt = float(position.get("positionAmt", 0) or 0)
     if amt == 0:
         return None
+    # Get klines for ATR calculation in TP/SL
+    try:
+        closes_1m, _ = get_ohlcv(symbol, interval="1m", limit=50)
+    except:
+        closes_1m = None
 
     with trades_lock:
         trades = []
@@ -1239,6 +1244,24 @@ def ensure_open_trade_record(symbol, position=None):
         }
         trades.append(adopted_trade)
         write_json_atomic(DATA_FILE, trades)
+
+        # Set TP/SL for adopted position to prevent unmanaged loss
+        try:
+            side = "BUY" if amt > 0 else "SELL"
+            atr = calculate_atr_percent(closes_1m, 14) if closes_1m else 0.1
+            leverage = get_position_leverage(position)
+            set_tp_sl(
+                symbol,
+                side,
+                entry,
+                atr_percent=atr,
+                risk_mode=adopted_trade.get("risk_mode", "normal"),
+                tp_percent=TEST_TP_PERCENT,
+                sl_percent=TEST_SL_PERCENT,
+                leverage=leverage,
+            )
+        except Exception as tp_err:
+            print(f"TP/SL setup failed for adopted {symbol}: {tp_err}")
 
     rebuild_auto_blacklist()
     print(f"ADOPTED OPEN POSITION {symbol}: local OPEN trade record dibuat dari posisi exchange.")
@@ -1311,7 +1334,12 @@ def get_realized_pnl_for_trade(symbol, opened_at=None):
                     if trade_time:
                         latest_time = max(latest_time or trade_time, trade_time)
                 if realized_pnl or latest_time:
-                    return realized_pnl, latest_time
+                    closed_time = (
+                        datetime.fromtimestamp(latest_time / 1000).strftime("%Y-%m-%d %H:%M:%S")
+                        if latest_time
+                        else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    )
+                    return realized_pnl, closed_time
             except Exception as exc:
                 print(f"Account trades fallback error {symbol}:", exc)
 
@@ -1369,7 +1397,9 @@ def sync_closed_trades():
         if trade.get("status") == "OPEN":
             symbol = trade.get("symbol")
             if symbol not in live_symbols and symbol not in symbols_to_sync:
-                symbols_to_sync.append(symbol)
+                # Only sync-close tracked symbols to prevent adopt-sync loop
+                if str(symbol) in symbol_filters or not symbol_filters:
+                    symbols_to_sync.append(symbol)
 
     if not symbols_to_sync:
         return trades
@@ -1383,10 +1413,34 @@ def sync_closed_trades():
                 break
         realized_pnl, closed_time = get_realized_pnl_for_trade(symbol, open_time)
         if realized_pnl == 0.0 and closed_time is None:
-            retry_pnl, retry_time = get_realized_pnl_for_trade(symbol)
+            retry_pnl, retry_time = get_realized_pnl_for_trade(symbol, open_time)
             if retry_pnl != 0.0 or retry_time is not None:
                 realized_pnl = retry_pnl
                 closed_time = retry_time
+            else:
+                # ESTIMATE PNL FOR TESTNET IF INCOME HISTORY IS MISSING
+                if config.TESTNET:
+                    try:
+                        orders = call_binance('futures_get_all_orders', symbol=symbol, limit=20)
+                        filled_exits = [o for o in orders if o.get('status') == 'FILLED' and o.get('type') in ('STOP_MARKET', 'TAKE_PROFIT_MARKET', 'MARKET')]
+                        if filled_exits:
+                            last_exit = filled_exits[-1]
+                            exit_price = float(last_exit.get('avgPrice', 0) or last_exit.get('stopPrice', 0) or 0)
+                            if exit_price > 0:
+                                t_rec = next((x for x in trades if x.get('symbol') == symbol and x.get('status') == 'OPEN'), None)
+                                if t_rec:
+                                    entry = float(t_rec.get('price', 0))
+                                    qty = float(t_rec.get('qty', 0))
+                                    side = t_rec.get('side', 'BUY')
+                                    if side == 'BUY':
+                                        realized_pnl = round((exit_price - entry) * qty, 4)
+                                    else:
+                                        realized_pnl = round((entry - exit_price) * qty, 4)
+                                    closed_time = datetime.fromtimestamp(last_exit.get('updateTime', 0)/1000).strftime('%Y-%m-%d %H:%M:%S')
+                                    t_rec['close_reason'] = 'EXCHANGE_TP' if last_exit.get('type') == 'TAKE_PROFIT_MARKET' else ('EXCHANGE_SL' if last_exit.get('type') == 'STOP_MARKET' else 'EXCHANGE_CLOSE')
+                                    t_rec['close_price'] = exit_price
+                    except Exception as e:
+                        print('Error estimating testnet pnl:', e)
         sync_results[symbol] = {
             "pnl": realized_pnl,
             "closed_time": closed_time
@@ -1435,7 +1489,7 @@ def sync_closed_trades():
         trade["close_price"] = round(float(trade.get("close_price", 0) or 0), 4)
         # If PnL came back 0 but it was a real close, retry with wider time window
         if realized_pnl == 0.0 and closed_time is None:
-            retry_pnl, retry_time = get_realized_pnl_for_trade(symbol)
+            retry_pnl, retry_time = get_realized_pnl_for_trade(symbol, trade.get("time"))
             if retry_pnl != 0.0 or retry_time is not None:
                 trade["pnl"] = retry_pnl
                 trade["closed_time"] = retry_time
@@ -2430,7 +2484,21 @@ def get_ohlcv(symbol, interval="1m", limit=100):
 def get_klines(symbol, interval="1m", limit=100):
     closes, _ = get_ohlcv(symbol, interval=interval, limit=limit)
     return closes
-def get_market_confirmation_snapshot(closes, volumes):
+
+def get_ohlcv_full(symbol, interval="1m", limit=100):
+    try:
+        klines = call_binance("futures_klines", symbol=symbol, interval=interval, limit=limit)
+        highs = [float(item[2]) for item in klines]
+        lows = [float(item[3]) for item in klines]
+        closes = [float(item[4]) for item in klines]
+        volumes = [float(item[5]) for item in klines]
+        return highs, lows, closes, volumes
+    except Exception as exc:
+        if _is_retryable_network_error(exc):
+            set_symbol_error_cooldown(symbol, seconds=240 if config.TESTNET else 120)
+        raise
+
+def get_market_confirmation_snapshot(closes, volumes, highs=None, lows=None):
     closes = [float(price) for price in closes if price is not None]
     volumes = [float(volume) for volume in volumes if volume is not None]
     if not closes:
@@ -2449,7 +2517,7 @@ def get_market_confirmation_snapshot(closes, volumes):
     ema20 = calculate_ema(closes, 20)
     ema50 = calculate_ema(closes, 50)
     vwap = calculate_vwap(closes, volumes) if volumes else 0.0
-    adx = calculate_adx(closes, 14)
+    adx = calculate_adx(highs, lows, closes, 14) if highs and lows else calculate_adx(closes, period=14)
     nonzero_volumes = [volume for volume in volumes if volume > 0]
     if len(nonzero_volumes) >= 2:
         latest_volume = nonzero_volumes[-1]
@@ -2555,7 +2623,7 @@ def evaluate_strategy_setup(symbol):
     disable_pullback_filter = settings.get('disable_pullback_filter', DISABLE_PULLBACK_FILTER)
 
     profile = get_strategy_profile()
-    closes_1m, volumes_1m = get_ohlcv(symbol, interval="1m", limit=120)
+    highs_1m, lows_1m, closes_1m, volumes_1m = get_ohlcv_full(symbol, interval="1m", limit=120)
     closes_5m, _ = get_ohlcv(symbol, interval="5m", limit=120)
     closes_15m, _ = get_ohlcv(symbol, interval="15m", limit=120)
     closes_1h, _ = get_ohlcv(symbol, interval="1h", limit=120)
@@ -2569,7 +2637,7 @@ def evaluate_strategy_setup(symbol):
     slope_15m = get_ema_slope_percent(closes_15m, 21, 5)
     slope_1h = get_ema_slope_percent(closes_1h, 21, 5)
 
-    confirmation = get_market_confirmation_snapshot(closes_1m, volumes_1m)
+    confirmation = get_market_confirmation_snapshot(closes_1m, volumes_1m, highs_1m, lows_1m)
     price = float(closes_1m[-1]) if closes_1m else 0.0
     vwap = float(confirmation["vwap"])
     ema20 = float(confirmation["ema20"])
@@ -3573,6 +3641,11 @@ def get_tp_sl_prices(symbol, side, entry, atr_percent=None, risk_mode="normal", 
 
 
 def set_tp_sl(symbol, side, entry, atr_percent=None, risk_mode="normal", tp_percent=None, sl_percent=None, leverage=None, force=False):
+    disable_exchange = os.getenv("DISABLE_EXCHANGE_TP_SL", "false").lower() == "true"
+    if disable_exchange and config.TESTNET:
+        print(f"Skipping exchange TP/SL for {symbol} due to DISABLE_EXCHANGE_TP_SL")
+        return
+
     max_retries = 3
     retry_delay = 0.5
 
@@ -3778,6 +3851,11 @@ def execute_trade(symbol):
             "hard_stop_symbol_cooldown_minutes": int(settings.get("hard_stop_symbol_cooldown_minutes", HARD_STOP_SYMBOL_COOLDOWN_MINUTES)),
         }
         regime_label = get_market_regime_state().get("label", "UNKNOWN")
+        disable_active_sluggish = os.getenv("DISABLE_ACTIVE_SLUGGISH", "true").lower() == "true"
+        if disable_active_sluggish and regime_label in ["ACTIVE", "SLUGGISH"]:
+            print(f"MARKET REGIME SKIP {symbol}: Regime is {regime_label}. Bot only trades in NORMAL mode.")
+            return
+
         guard = evaluate_pre_trade(symbol, balance, current_open_positions, stats, guard_config, market_regime=regime_label)
         if RISK_GUARD_ENABLED:
             active_policy = str(guard.get("policy", "allow") or "allow")
@@ -4136,6 +4214,30 @@ def auto_close():
             )
             hard_stop_roi = float(settings.get("hard_stop_roi_percent", HARD_STOP_ROI_PERCENT))
             trailing_enabled = bool(settings.get("trailing_enabled", True))
+            fast_trailing_enabled = bool(settings.get("fast_trailing_enabled", True))
+            configured_trailing_trigger = max(
+                float(settings.get("trailing_trigger_roi_percent", TRAILING_TRIGGER_ROI_PERCENT) or TRAILING_TRIGGER_ROI_PERCENT),
+                0.01,
+            )
+            configured_trailing_floor = max(
+                float(settings.get("trailing_callback_roi_percent", TRAILING_CALLBACK_ROI_PERCENT) or TRAILING_CALLBACK_ROI_PERCENT),
+                0.01,
+            )
+            if fast_trailing_enabled:
+                configured_trailing_trigger = min(
+                    configured_trailing_trigger,
+                    max(
+                        float(settings.get("fast_trailing_trigger_roi_percent", FAST_TRAILING_TRIGGER_ROI_PERCENT) or FAST_TRAILING_TRIGGER_ROI_PERCENT),
+                        0.01,
+                    ),
+                )
+                configured_trailing_floor = min(
+                    configured_trailing_floor,
+                    max(
+                        float(settings.get("fast_trailing_callback_roi_percent", FAST_TRAILING_CALLBACK_ROI_PERCENT) or FAST_TRAILING_CALLBACK_ROI_PERCENT),
+                        0.01,
+                    ),
+                )
             if not auto_close_enabled:
                 time.sleep(5)
                 continue
@@ -4196,20 +4298,20 @@ def auto_close():
                 elif scalping_mode:
                     partial_trigger = max(1.5, min(auto_close_roi_percent * float(profile["partial_tp_factor"]), 2.5))
                     breakeven_trigger = max(2.5, partial_trigger - float(profile["breakeven_buffer"]))
-                    trailing_trigger = max(3.0, partial_trigger + float(profile["trailing_trigger_bonus"]))
-                    trailing_floor = max(0.75, min(TRAILING_CALLBACK_ROI_PERCENT * 0.75 * float(profile["trailing_floor_factor"]), 2.0))
+                    trailing_trigger = configured_trailing_trigger
+                    trailing_floor = configured_trailing_floor
                     hard_stop_threshold = max(hard_stop_roi, -4.0)
                 elif risk_mode == "cautious":
                     partial_trigger = max(1.8, min(auto_close_roi_percent * float(profile["partial_tp_factor"]), 3.0))
                     breakeven_trigger = max(2.0, partial_trigger - float(profile["breakeven_buffer"]))
-                    trailing_trigger = max(2.7, partial_trigger + float(profile["trailing_trigger_bonus"]))
-                    trailing_floor = max(0.55, TRAILING_CALLBACK_ROI_PERCENT * float(profile["trailing_floor_factor"]))
+                    trailing_trigger = configured_trailing_trigger
+                    trailing_floor = configured_trailing_floor
                     hard_stop_threshold = hard_stop_roi
                 else:
                     partial_trigger = max(2.1, min(auto_close_roi_percent * (float(profile["partial_tp_factor"]) + 0.1), 4.0))
                     breakeven_trigger = max(1.0, partial_trigger - (float(profile["breakeven_buffer"]) + 0.15))
-                    trailing_trigger = max(3.1, partial_trigger + float(profile["trailing_trigger_bonus"]))
-                    trailing_floor = max(0.7, TRAILING_CALLBACK_ROI_PERCENT * (float(profile["trailing_floor_factor"]) + 0.05))
+                    trailing_trigger = configured_trailing_trigger
+                    trailing_floor = configured_trailing_floor
                     hard_stop_threshold = hard_stop_roi
                 peak_roi = max(float(trade.get("peak_roi", 0) or 0), pct)
                 partial_done = bool(trade.get("partial_tp_done"))

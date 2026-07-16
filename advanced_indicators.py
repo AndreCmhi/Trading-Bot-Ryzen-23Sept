@@ -125,29 +125,66 @@ def calculate_vwap(prices, volumes):
     return round(total_pv / total_volume, 8)
 
 
-def calculate_adx(prices, period=14):
-    """Calculate Average Directional Index (trend strength)"""
-    series = [float(p) for p in prices if p]
-    if len(series) < period + 1:
+def calculate_adx(highs, lows=None, closes=None, period=14):
+    """Calculate Wilder ADX on the standard 0-100 scale."""
+    if lows is None or closes is None:
+        closes = [float(p) for p in highs if p is not None]
+        highs = closes
+        lows = closes
+    else:
+        highs = [float(p) for p in highs if p is not None]
+        lows = [float(p) for p in lows if p is not None]
+        closes = [float(p) for p in closes if p is not None]
+
+    length = min(len(highs), len(lows), len(closes))
+    if length < (period * 2) + 1:
         return 0.0
-    
-    # Simplified ADX calculation
-    moves = []
-    for i in range(1, len(series)):
-        move = abs(series[i] - series[i-1])
-        moves.append(move)
-    
-    if not moves:
+
+    highs = highs[-length:]
+    lows = lows[-length:]
+    closes = closes[-length:]
+    true_ranges = []
+    plus_dm = []
+    minus_dm = []
+
+    for i in range(1, length):
+        high_diff = highs[i] - highs[i - 1]
+        low_diff = lows[i - 1] - lows[i]
+        true_range = max(
+            highs[i] - lows[i],
+            abs(highs[i] - closes[i - 1]),
+            abs(lows[i] - closes[i - 1]),
+        )
+        true_ranges.append(true_range)
+        plus_dm.append(high_diff if high_diff > low_diff and high_diff > 0 else 0.0)
+        minus_dm.append(low_diff if low_diff > high_diff and low_diff > 0 else 0.0)
+
+    atr = sum(true_ranges[:period])
+    plus_smoothed = sum(plus_dm[:period])
+    minus_smoothed = sum(minus_dm[:period])
+    dx_values = []
+
+    for i in range(period, len(true_ranges)):
+        atr = atr - (atr / period) + true_ranges[i]
+        plus_smoothed = plus_smoothed - (plus_smoothed / period) + plus_dm[i]
+        minus_smoothed = minus_smoothed - (minus_smoothed / period) + minus_dm[i]
+        if atr <= 0:
+            dx_values.append(0.0)
+            continue
+
+        plus_di = 100.0 * (plus_smoothed / atr)
+        minus_di = 100.0 * (minus_smoothed / atr)
+        di_total = plus_di + minus_di
+        dx_values.append(0.0 if di_total <= 0 else 100.0 * abs(plus_di - minus_di) / di_total)
+
+    if len(dx_values) < period:
         return 0.0
-    
-    avg_move = sum(moves[-period:]) / min(period, len(moves))
-    first_price = series[-period] if len(series) >= period else series[0]
-    
-    if first_price == 0:
-        return 0.0
-    
-    adx = round((avg_move / first_price) * 100, 4)
-    return min(adx * 5, 100.0)  # Scale to 0-100
+
+    adx = sum(dx_values[:period]) / period
+    for dx in dx_values[period:]:
+        adx = ((adx * (period - 1)) + dx) / period
+
+    return round(max(0.0, min(adx, 100.0)), 4)
 
 
 def calculate_stochastic(prices, period=14, smooth=3):

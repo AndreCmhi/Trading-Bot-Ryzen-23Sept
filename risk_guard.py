@@ -20,6 +20,12 @@ def _trade_dt(trade):
         value = trade.get(key)
         if not value:
             continue
+        # Handle integer epoch millisecond timestamps
+        if isinstance(value, (int, float)):
+            try:
+                return datetime.fromtimestamp(value / 1000)
+            except (OSError, OverflowError):
+                continue
         try:
             return datetime.strptime(str(value), "%Y-%m-%d %H:%M:%S")
         except ValueError:
@@ -37,13 +43,25 @@ def _closed_trades(trades):
     return items
 
 
+def _is_adopted_bookkeeping(trade):
+    return (
+        str(trade.get("strategy_family", "")).upper() == "ADOPTED"
+        or str(trade.get("ai_mode", "")).lower() == "sync-adopt"
+        or str(trade.get("close_reason", "")).upper() == "SYNC_CLOSE"
+    )
+
+
+def _risk_counted_trades(trades):
+    return [trade for trade in trades if not _is_adopted_bookkeeping(trade)]
+
+
 def _is_loss(trade):
     return _safe_float(trade.get("pnl"), 0.0) < 0
 
 
 def count_consecutive_losses(trades):
     losses = 0
-    for trade in reversed(_closed_trades(trades)):
+    for trade in reversed(_risk_counted_trades(_closed_trades(trades))):
         pnl = _safe_float(trade.get("pnl"), 0.0)
         if pnl < 0:
             losses += 1
@@ -81,15 +99,16 @@ def evaluate_pre_trade(symbol, balance=None, open_positions=None, stats=None, co
     candidate_side = str(cfg.get("candidate_side", "") or "").upper()
     buy_scalping_pause_active = bool(cfg.get("buy_scalping_pause_active", False))
 
-    recent_daily = [trade for trade in closed if (_trade_dt(trade) or datetime.min) >= daily_cutoff]
-    recent_hourly = [trade for trade in closed if (_trade_dt(trade) or datetime.min) >= hourly_cutoff]
+    risk_closed = _risk_counted_trades(closed)
+    recent_daily = [trade for trade in risk_closed if (_trade_dt(trade) or datetime.min) >= daily_cutoff]
+    recent_hourly = [trade for trade in risk_closed if (_trade_dt(trade) or datetime.min) >= hourly_cutoff]
     symbol_daily = [trade for trade in recent_daily if str(trade.get("symbol", "")).upper() == symbol]
-    symbol_closed = [trade for trade in closed if str(trade.get("symbol", "")).upper() == symbol]
+    symbol_closed = [trade for trade in risk_closed if str(trade.get("symbol", "")).upper() == symbol]
 
     daily_loss = abs(sum(min(_safe_float(trade.get("pnl"), 0.0), 0.0) for trade in recent_daily))
     hourly_loss = abs(sum(min(_safe_float(trade.get("pnl"), 0.0), 0.0) for trade in recent_hourly))
     hourly_losses = sum(1 for trade in recent_hourly if _is_loss(trade))
-    consecutive_losses = count_consecutive_losses(closed)
+    consecutive_losses = count_consecutive_losses(risk_closed)
     symbol_losses_today = sum(1 for trade in symbol_daily if _is_loss(trade))
     symbol_consecutive_losses = count_consecutive_losses(symbol_closed)
     symbol_hard_stop = next(

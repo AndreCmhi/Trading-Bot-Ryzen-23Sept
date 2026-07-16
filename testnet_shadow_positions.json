@@ -1,17 +1,17 @@
 {
-  "ETHUSDT": {
-    "symbol": "ETHUSDT",
-    "positionAmt": "0.1",
-    "entryPrice": "1718.74",
-    "markPrice": "1718.74",
-    "unRealizedProfit": "0",
-    "leverage": "3",
-    "positionSide": "BOTH",
-    "positionInitialMargin": "57.29133333",
-    "isolatedWallet": "57.29133333",
-    "marginType": "isolated",
-    "isolated": true,
-    "updateTime": 1781504156690,
-    "shadow": true
-  }
+    "BTCUSDT": {
+        "symbol": "BTCUSDT",
+        "positionAmt": "0.1",
+        "entryPrice": "10000.0",
+        "markPrice": "150000.0",
+        "unRealizedProfit": "14000.0",
+        "leverage": "10",
+        "positionSide": "BOTH",
+        "positionInitialMargin": "100.0",
+        "isolatedWallet": "100.0",
+        "marginType": "isolated",
+        "isolated": true,
+        "updateTime": 1783832324242,
+        "shadow": true
+    }
 }
