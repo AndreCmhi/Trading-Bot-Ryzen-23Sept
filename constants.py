@@ -15,7 +15,7 @@ SCAN_INTERVAL = int(os.getenv('SCAN_INTERVAL', '60'))
 DEFAULT_LEVERAGE = 5
 DEFAULT_FIXED_TRADE_NOTIONAL_USDT = float(os.getenv('DEFAULT_FIXED_TRADE_NOTIONAL_USDT', '3.0'))
 DEFAULT_ACTIVE_MARGIN_BALANCE_PERCENT = float(os.getenv('DEFAULT_ACTIVE_MARGIN_BALANCE_PERCENT', '25.0'))
-DEFAULT_RISK_PER_TRADE_PERCENT = float(os.getenv('DEFAULT_RISK_PER_TRADE_PERCENT', '1.0'))
+DEFAULT_RISK_PER_TRADE_PERCENT = float(os.getenv('DEFAULT_RISK_PER_TRADE_PERCENT', '0.75'))
 FEE_BUFFER_FACTOR = float(os.getenv('FEE_BUFFER_FACTOR', '1.5'))
 MAX_RISK_PER_TRADE_PERCENT = float(os.getenv('MAX_RISK_PER_TRADE_PERCENT', '2.0'))
 DEFAULT_MIN_RISK_REWARD_RATIO = float(os.getenv('DEFAULT_MIN_RISK_REWARD_RATIO', '2.0'))
@@ -36,25 +36,25 @@ TEST_TRAILING_CALLBACK_ROI_PERCENT = float(os.getenv('TEST_TRAILING_CALLBACK_ROI
 
 AI_ENABLED = os.getenv('AI_ENABLED', 'false' if TEST_MINIMUM_TRADING_MODE else 'true').lower() == 'true'
 AI_ADVISORY_ONLY = True if TEST_MINIMUM_TRADING_MODE else os.getenv('AI_ADVISORY_ONLY', 'false').lower() == 'true'
-AI_MIN_CONFIDENCE = float(os.getenv('AI_MIN_CONFIDENCE', '0.55'))
-RISK_GUARD_ENABLED = os.getenv('RISK_GUARD_ENABLED', 'false').lower() == 'true'
+AI_MIN_CONFIDENCE = float(os.getenv('AI_MIN_CONFIDENCE', '0.62'))
+RISK_GUARD_ENABLED = os.getenv('RISK_GUARD_ENABLED', 'true').lower() == 'true'
 RELAXED_SETUP_MODE = os.getenv('RELAXED_SETUP_MODE', 'false').lower() == 'true'
 UNRESTRICTED_SCAN_UNIVERSE = True
 DISABLE_TREND_FILTER = os.getenv('DISABLE_TREND_FILTER', 'false').lower() == 'true'
 DISABLE_PULLBACK_FILTER = os.getenv('DISABLE_PULLBACK_FILTER', 'false').lower() == 'true'
 
-MAX_OPEN_POSITIONS = int(os.getenv('MAX_OPEN_POSITIONS', '30'))
-MAX_DAILY_LOSS_USDT = float(os.getenv('MAX_DAILY_LOSS_USDT', '100'))
-MAX_CONSECUTIVE_LOSSES = int(os.getenv('MAX_CONSECUTIVE_LOSSES', '5'))
-MAX_TRADES_PER_HOUR = int(os.getenv('MAX_TRADES_PER_HOUR', '15'))
+MAX_OPEN_POSITIONS = int(os.getenv('MAX_OPEN_POSITIONS', '5'))
+MAX_DAILY_LOSS_USDT = float(os.getenv('MAX_DAILY_LOSS_USDT', '20'))
+MAX_CONSECUTIVE_LOSSES = int(os.getenv('MAX_CONSECUTIVE_LOSSES', '3'))
+MAX_TRADES_PER_HOUR = int(os.getenv('MAX_TRADES_PER_HOUR', '6'))
 MAX_LOSSES_PER_HOUR = int(os.getenv('MAX_LOSSES_PER_HOUR', '1'))
-HOURLY_LOSS_LIMIT_USDT = float(os.getenv('HOURLY_LOSS_LIMIT_USDT', '0.5'))
+HOURLY_LOSS_LIMIT_USDT = float(os.getenv('HOURLY_LOSS_LIMIT_USDT', '2.0'))
 LOSS_COOLDOWN_MINUTES = int(os.getenv('LOSS_COOLDOWN_MINUTES', '60'))
 MAX_SYMBOL_TRADES_PER_DAY = int(os.getenv('MAX_SYMBOL_TRADES_PER_DAY', '1'))
 MAX_SYMBOL_LOSSES_PER_DAY = int(os.getenv('MAX_SYMBOL_LOSSES_PER_DAY', '1'))
 MAX_SYMBOL_CONSECUTIVE_LOSSES = int(os.getenv('MAX_SYMBOL_CONSECUTIVE_LOSSES', '1'))
-SYMBOL_LOSS_COOLDOWN_MINUTES = int(os.getenv('SYMBOL_LOSS_COOLDOWN_MINUTES', '180'))
-HARD_STOP_SYMBOL_COOLDOWN_MINUTES = int(os.getenv('HARD_STOP_SYMBOL_COOLDOWN_MINUTES', '45'))
+SYMBOL_LOSS_COOLDOWN_MINUTES = int(os.getenv('SYMBOL_LOSS_COOLDOWN_MINUTES', '240'))
+HARD_STOP_SYMBOL_COOLDOWN_MINUTES = int(os.getenv('HARD_STOP_SYMBOL_COOLDOWN_MINUTES', '120'))
 
 AUTO_PAUSE_ON_GUARD_HALT = os.getenv('AUTO_PAUSE_ON_GUARD_HALT', 'false').lower() == 'true'
 AUTO_CLOSE_POSITIONS_ON_GUARD_HALT = os.getenv('AUTO_CLOSE_POSITIONS_ON_GUARD_HALT', 'true').lower() == 'true'
@@ -69,14 +69,14 @@ ENTRY_BREAKOUT_BUFFER_PERCENT = float(os.getenv('ENTRY_BREAKOUT_BUFFER_PERCENT',
 MIN_EMA_SLOPE_5M = float(os.getenv('MIN_EMA_SLOPE_5M', '0.015'))
 MIN_EMA_SLOPE_15M = float(os.getenv('MIN_EMA_SLOPE_15M', '0.02'))
 MIN_EMA_SLOPE_1H = float(os.getenv('MIN_EMA_SLOPE_1H', '0.015'))
-PARTIAL_TP_ROI_PERCENT = float(os.getenv('PARTIAL_TP_ROI_PERCENT', '10.0'))
+PARTIAL_TP_ROI_PERCENT = float(os.getenv('PARTIAL_TP_ROI_PERCENT', '4.0'))
 PARTIAL_CLOSE_FRACTION = float(os.getenv('PARTIAL_CLOSE_FRACTION', '0.35'))
-BREAKEVEN_TRIGGER_ROI_PERCENT = float(os.getenv('BREAKEVEN_TRIGGER_ROI_PERCENT', '6.0'))
+BREAKEVEN_TRIGGER_ROI_PERCENT = float(os.getenv('BREAKEVEN_TRIGGER_ROI_PERCENT', '2.5'))
 TRAILING_TRIGGER_ROI_PERCENT = float(os.getenv('TRAILING_TRIGGER_ROI_PERCENT', '2.5'))
 TRAILING_CALLBACK_ROI_PERCENT = float(os.getenv('TRAILING_CALLBACK_ROI_PERCENT', '0.8'))
 FAST_TRAILING_TRIGGER_ROI_PERCENT = float(os.getenv('FAST_TRAILING_TRIGGER_ROI_PERCENT', '0.9'))
 FAST_TRAILING_CALLBACK_ROI_PERCENT = float(os.getenv('FAST_TRAILING_CALLBACK_ROI_PERCENT', '0.25'))
-HARD_STOP_ROI_PERCENT = float(os.getenv('HARD_STOP_ROI_PERCENT', '-4.0'))
+HARD_STOP_ROI_PERCENT = float(os.getenv('HARD_STOP_ROI_PERCENT', '-2.5'))
 
 SYMBOL_SCAN_MODE = os.getenv('SYMBOL_SCAN_MODE', 'ALL').strip().upper()
 MANUAL_BLOCKED_SYMBOLS = {
@@ -106,8 +106,8 @@ HISTORY_MONITOR_REFRESH_SECONDS = 15
 
 STRATEGY_PROFILES = {
     'AGGRESSIVE': {
-        'min_score': 6,
-        'ai_min_confidence': 0.58,
+        'min_score': 12,
+        'ai_min_confidence': 0.62,
         'pullback_distance_percent': 0.42,
         'entry_breakout_buffer_percent': 0.02,
         'min_ema_slope_5m': 0.01,
@@ -117,15 +117,15 @@ STRATEGY_PROFILES = {
         'buy_rsi_max': 65,
         'sell_rsi_min': 35,
         'sell_rsi_max': 56,
-        'auto_close_roi_percent': 3.8,
+        'auto_close_roi_percent': 3.0,
         'partial_tp_factor': 0.5,
         'breakeven_buffer': 0.55,
         'trailing_trigger_bonus': 0.55,
         'trailing_floor_factor': 0.3,
     },
     'BALANCED': {
-        'min_score': 6,
-        'ai_min_confidence': 0.6,
+        'min_score': 12,
+        'ai_min_confidence': 0.65,
         'pullback_distance_percent': PULLBACK_DISTANCE_PERCENT,
         'entry_breakout_buffer_percent': ENTRY_BREAKOUT_BUFFER_PERCENT,
         'min_ema_slope_5m': MIN_EMA_SLOPE_5M,
@@ -142,9 +142,9 @@ STRATEGY_PROFILES = {
         'trailing_floor_factor': 0.35,
     },
     'SCALPING': {
-        'min_score': 8,
-        'ai_min_confidence': 0.66,
-        'pullback_distance_percent': 0.24,
+        'min_score': 12,
+        'ai_min_confidence': 0.70,
+        'pullback_distance_percent': 0.20,
         'entry_breakout_buffer_percent': 0.05,
         'min_ema_slope_5m': 0.025,
         'min_ema_slope_15m': 0.03,
@@ -161,8 +161,8 @@ STRATEGY_PROFILES = {
         'scalping_mode': True,
     },
     'PRECISION': {
-        'min_score': 7,
-        'ai_min_confidence': 0.64,
+        'min_score': 12,
+        'ai_min_confidence': 0.68,
         'pullback_distance_percent': 0.28,
         'entry_breakout_buffer_percent': 0.04,
         'min_ema_slope_5m': 0.02,
@@ -179,8 +179,8 @@ STRATEGY_PROFILES = {
         'trailing_floor_factor': 0.45,
     },
     'TARGET_75': {
-        'min_score': 9,
-        'ai_min_confidence': 0.78,
+        'min_score': 12,
+        'ai_min_confidence': 0.80,
         'pullback_distance_percent': 0.22,
         'entry_breakout_buffer_percent': 0.06,
         'min_ema_slope_5m': 0.03,

@@ -45,24 +45,27 @@ def calculate_bollinger_bands(prices, period=20, std_dev=2):
 
 
 def calculate_macd(prices, fast=12, slow=26, signal=9):
-    """Calculate MACD (Line, Signal, Histogram)"""
-    if not prices or len(prices) < slow:
+    """Calculate MACD with proper EMA-of-MACD signal line."""
+    series = [float(p) for p in prices if p]
+    if len(series) < slow + signal:
         return {"macd": 0.0, "signal": 0.0, "histogram": 0.0}
-    
-    ema_fast = calculate_ema(prices, fast)
-    ema_slow = calculate_ema(prices, slow)
-    macd_line = round(ema_fast - ema_slow, 8)
-    
-    # Calculate signal line (EMA of MACD)
-    # For simplicity, using approximate signal
-    signal_line = round(macd_line * 0.8, 8)  # Simplified
+    k_fast = 2 / (fast + 1)
+    k_slow = 2 / (slow + 1)
+    k_sig = 2 / (signal + 1)
+    ema_f = series[0]
+    ema_s = series[0]
+    macd_values = []
+    for price in series:
+        ema_f = (price - ema_f) * k_fast + ema_f
+        ema_s = (price - ema_s) * k_slow + ema_s
+        macd_values.append(ema_f - ema_s)
+    sig_val = macd_values[0]
+    for mv in macd_values[1:]:
+        sig_val = (mv - sig_val) * k_sig + sig_val
+    macd_line = round(macd_values[-1], 8)
+    signal_line = round(sig_val, 8)
     histogram = round(macd_line - signal_line, 8)
-    
-    return {
-        "macd": macd_line,
-        "signal": signal_line,
-        "histogram": histogram
-    }
+    return {"macd": macd_line, "signal": signal_line, "histogram": histogram}
 
 
 def calculate_rsi(prices, period=14):
@@ -188,22 +191,23 @@ def calculate_adx(highs, lows=None, closes=None, period=14):
 
 
 def calculate_stochastic(prices, period=14, smooth=3):
-    """Calculate Stochastic Oscillator (%K, %D)"""
+    """Calculate Stochastic Oscillator (%K, %D) with proper SMA smoothing."""
     series = [float(p) for p in prices if p]
-    if len(series) < period:
+    if len(series) < period + smooth:
         return {"k": 50.0, "d": 50.0}
-    
-    window = series[-period:]
-    high = max(window)
-    low = min(window)
-    current = series[-1]
-    
-    if high == low:
-        return {"k": 50.0, "d": 50.0}
-    
-    k = round(((current - low) / (high - low)) * 100, 4)
-    d = round(k * 0.9, 4)  # Simplified smoothing
-    
+    k_values = []
+    for i in range(period - 1, len(series)):
+        window = series[i - period + 1: i + 1]
+        high = max(window)
+        low = min(window)
+        if high == low:
+            k_values.append(50.0)
+        else:
+            k_values.append(((series[i] - low) / (high - low)) * 100)
+    if len(k_values) < smooth:
+        return {"k": round(k_values[-1], 4), "d": round(k_values[-1], 4)}
+    k = round(k_values[-1], 4)
+    d = round(sum(k_values[-smooth:]) / smooth, 4)
     return {"k": k, "d": d}
 
 

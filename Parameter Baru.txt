@@ -1,0 +1,7 @@
+Parameter Baru
+Parameter	Sekarang	Bisa Dinaikin
+ai_min_confidence	0.60	→ 0.75
+min_score	6	→ 8
+auto_close_roi_percent	3.0	→ 2.5
+fast_trailing_trigger_roi_percent	0.9	→ 0.7
+max_open_positions	5	→ 4

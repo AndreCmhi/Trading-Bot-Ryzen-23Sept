@@ -10,7 +10,7 @@ OLLAMA_ENABLED = os.getenv("OLLAMA_ENABLED", "false").strip().lower() == "true"
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434/api/generate").strip()
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:3b").strip()
 OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "10"))
-AI_PROVIDER = os.getenv("AI_PROVIDER", "heuristic").strip().lower()
+AI_PROVIDER = "groq"
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant").strip()
 GROQ_URL = os.getenv("GROQ_URL", "https://api.groq.com/openai/v1/chat/completions").strip()
@@ -167,15 +167,15 @@ def _quality_gate(snapshot: Dict[str, Any], decision: Dict[str, Any]) -> Dict[st
         return {}
 
     score = _safe_float(snapshot.get("score"), 0.0)
-    min_score = _safe_float(snapshot.get("min_score"), 8.0)
+    min_score = _safe_float(snapshot.get("min_score"), 10.0)
     confidence = _safe_float(decision.get("confidence"), 0.0)
     min_confidence = _safe_float(snapshot.get("ai_min_confidence"), 0.75)
     rr_ratio = _safe_float(decision.get("risk_reward_ratio"), 0.0)
-    min_rr = max(_safe_float(snapshot.get("min_risk_reward_ratio"), 2.0), 1.5)
+    min_rr = max(_safe_float(snapshot.get("min_risk_reward_ratio"), 2.0), 2.0)
     adx_val = _safe_float(snapshot.get("adx"), 0.0)
     min_adx = _safe_float(snapshot.get("min_adx"), 18.0)
     vol_ratio = _safe_float(snapshot.get("vol_ratio", snapshot.get("volume_ratio")), 0.0)
-    min_volume_ratio = _safe_float(snapshot.get("min_volume_ratio"), 0.9)
+    min_volume_ratio = 0.0 if getattr(config, "TESTNET", False) else _safe_float(snapshot.get("min_volume_ratio"), 0.8)
     rsi = _safe_float(snapshot.get("rsi"), 50.0)
     candidate_side = str(snapshot.get("candidate_side", action) or action).upper()
     trend_5m = str(snapshot.get("trend_5m", "sideways") or "sideways").lower()
@@ -196,16 +196,27 @@ def _quality_gate(snapshot: Dict[str, Any], decision: Dict[str, Any]) -> Dict[st
         return _block_trade(f"quality-gate: ADX {adx_val:.2f} di bawah minimum {min_adx:.2f}")
     if vol_ratio < min_volume_ratio:
         return _block_trade(f"quality-gate: volume ratio x{vol_ratio:.2f} di bawah minimum x{min_volume_ratio:.2f}")
-    if aligned_tfs < 2:
+    if aligned_tfs < 2:  # require at least 2 of 3 timeframes
         return _block_trade(f"quality-gate: trend alignment kurang ({aligned_tfs}/3 timeframe)")
-    if action == "BUY" and not 42 <= rsi <= 66:
-        return _block_trade(f"quality-gate: RSI BUY {rsi:.1f} di luar zona sehat 42-66")
-    if action == "SELL" and not 34 <= rsi <= 58:
-        return _block_trade(f"quality-gate: RSI SELL {rsi:.1f} di luar zona sehat 34-58")
+    if action == "BUY":
+        if adx_val >= 20:
+            if not (15 <= rsi <= 78):
+                return _block_trade(f"quality-gate: RSI BUY {rsi:.1f} di luar zona momentum trending 15-78")
+        else:
+            if not (25 <= rsi <= 68):
+                return _block_trade(f"quality-gate: RSI BUY {rsi:.1f} di luar zona ranging 25-68")
+    elif action == "SELL":
+        if adx_val >= 20:
+            if not (22 <= rsi <= 85):
+                return _block_trade(f"quality-gate: RSI SELL {rsi:.1f} di luar zona momentum trending 22-85")
+        else:
+            if not (32 <= rsi <= 75):
+                return _block_trade(f"quality-gate: RSI SELL {rsi:.1f} di luar zona ranging 32-75")
 
     return {}
 
 
+# ENHANCED HEURISTIC - More Aggressive for PNL
 def _heuristic_decision(snapshot: Dict[str, Any]) -> Dict[str, Any]:
     score = _safe_float(snapshot.get("score"), 0.0)
     rsi = _safe_float(snapshot.get("rsi"), 50.0)
@@ -240,16 +251,16 @@ def _heuristic_decision(snapshot: Dict[str, Any]) -> Dict[str, Any]:
     tf_bearish = sum(1 for t in [trend_5m, trend_15m, trend_1h] if t == "bearish")
 
     # Multi-factor confidence calculation
-    confidence_base = 0.45
-    score_factor = min(score / 10.0, 1.0) * 0.25
+    confidence_base = 0.60
+    score_factor = min(score / 8.0, 1.0) * 0.30
 
     # Trend alignment bonus
     if action == "BUY":
-        trend_bonus = tf_bullish * 0.05
-        trend_penalty = tf_bearish * 0.04
+        trend_bonus = tf_bullish * 0.04
+        trend_penalty = tf_bearish * 0.06
     else:
-        trend_bonus = tf_bearish * 0.05
-        trend_penalty = tf_bullish * 0.04
+        trend_bonus = tf_bearish * 0.04
+        trend_penalty = tf_bullish * 0.06
 
     # ADX trend strength
     adx_bonus = 0
@@ -271,8 +282,8 @@ def _heuristic_decision(snapshot: Dict[str, Any]) -> Dict[str, Any]:
     if action == "BUY":
         if 40 <= rsi <= 65:
             rsi_bonus = 0.06
-        elif 30 <= rsi < 40 and stoch_k < 20:
-            rsi_bonus = 0.08  # Oversold bounce
+        elif 40 <= rsi < 48 and stoch_k < 30:
+            rsi_bonus = 0.06  # Mild oversold bounce
         elif rsi > 70:
             rsi_bonus = -0.06  # Overbought, risky
     else:
@@ -318,25 +329,25 @@ def _heuristic_decision(snapshot: Dict[str, Any]) -> Dict[str, Any]:
     confidence = max(0.05, min(raw_confidence, 0.95))
 
     # Determine if trade is allowed
-    min_conf = _safe_float(snapshot.get("ai_min_confidence"), 0.60)
+    min_conf = _safe_float(snapshot.get("ai_min_confidence"), 0.40)
     allow_trade = confidence >= min_conf
 
     # Dynamic SL/TP based on ADX and ATR
     trend_strong = adx_val >= 25
     trend_weak = adx_val < 20
     if trend_strong:
-        sl_percent = round(max(atr_percent * 1.8, 0.6), 4)
-        tp_percent = round(max(sl_percent * min_rr, sl_percent * 2.0), 4)
+        sl_percent = round(max(atr_percent * 1.5, 0.5), 4)
+        tp_percent = round(max(sl_percent * min_rr * 1.2, sl_percent * 2.5), 4)
         suggested_leverage = 3
         risk_mode = "normal"
     elif trend_weak:
-        sl_percent = round(max(atr_percent * 2.0, 0.7), 4)
-        tp_percent = round(max(sl_percent * min_rr, sl_percent * 1.5), 4)
+        sl_percent = round(max(atr_percent * 1.8, 0.6), 4)
+        tp_percent = round(max(sl_percent * min_rr * 1.2, sl_percent * 2.0), 4)
         suggested_leverage = 2
         risk_mode = "cautious"
     else:
-        sl_percent = round(max(atr_percent * 2.0, 0.7), 4)
-        tp_percent = round(max(sl_percent * min_rr, sl_percent * 1.8), 4)
+        sl_percent = round(max(atr_percent * 1.8, 0.6), 4)
+        tp_percent = round(max(sl_percent * min_rr * 1.2, sl_percent * 2.2), 4)
         suggested_leverage = 3
         risk_mode = "normal"
 
@@ -387,8 +398,10 @@ def _normalize_decision(data: Dict[str, Any], snapshot: Dict[str, Any], provider
     if action not in {"BUY", "SELL", "HOLD"}:
         action = fallback["action"]
 
-    sl_percent = max(_safe_float(data.get("sl_percent"), fallback["sl_percent"]), 0.1)
-    tp_percent = max(_safe_float(data.get("tp_percent"), fallback["tp_percent"]), sl_percent * 1.1)
+    raw_sl = _safe_float(data.get("sl_percent"), fallback["sl_percent"])
+    sl_percent = max(raw_sl, 0.75) if raw_sl > 0 else 0.75
+    raw_tp = _safe_float(data.get("tp_percent"), fallback["tp_percent"])
+    tp_percent = max(raw_tp, sl_percent * 2.5, 2.5)
     rr_ratio = max(
         _safe_float(data.get("risk_reward_ratio"), 0.0),
         calculate_risk_reward_ratio(tp_percent, sl_percent),
@@ -431,19 +444,19 @@ def _normalize_decision(data: Dict[str, Any], snapshot: Dict[str, Any], provider
 def _build_prompt(snapshot: Dict[str, Any]) -> str:
     payload = json.dumps(snapshot, ensure_ascii=False)
     return (
-        "You are an elite institutional quantitative risk manager and master trader specializing in high-frequency scalping. "
-        "Your absolute objective is to evaluate the provided market snapshot and protect capital while seeking a >75% win rate probability. "
+        "You are an aggressive crypto futures trader focused on MAXIMUM PNL. Seek high-quality setups but dont miss opportunities. "
+        "Your absolute objective is to evaluate the provided market snapshot and maximize profit while managing reasonable risk. Aim for 60%+ win rate with high reward trades. "
         "Strictly analyze: "
-        "1. Trend Alignment: If trend_5m, trend_15m, and trend_1h are conflicting, demand a strong reason or pullback confirmation before allowing trade. "
-        "2. Momentum/RSI: Avoid buying tops (RSI > 70 for BUY) or selling bottoms (RSI < 30 for SELL) unless a strong breakout is clear. "
+        "1. Trend Alignment: If 2+ timeframes align, that is sufficient - dont be too strict on conflicting signals. "
+        "2. Momentum/RSI: Use momentum wisely but dont over-filter (RSI > 70 for BUY) or selling bottoms (RSI < 30 for SELL) unless a strong breakout is clear. "
         "3. Volatility (ATR): Use ATR to calibrate SL. Set SL far enough from local noise but tight enough to protect capital. "
-        "4. Risk Reward: Keep target TP at least 1.5 to 2.5x of SL unless scalping. "
-        "Respect candidate_side if it matches momentum. If the setup is weak, conflicting, or lacks clear edge, you MUST set allow_trade: false and action: \"HOLD\". "
+        "4. Risk Reward: Target 2-4x R:R for optimal PNL. "
+        "Respect candidate_side if it matches momentum. Allow trades if basic criteria met - dont overthink and action: \"HOLD\". "
         "Output ONLY a raw JSON string matching this exact schema: "
         '{"allow_trade":true,"action":"BUY|SELL|HOLD","confidence":0.85,'
-        '"suggested_risk_percent":0.75,"suggested_leverage":10,'
-        '"recommended_margin_mode":"ISOLATED","tp_percent":1.5,'
-        '"sl_percent":0.75,"risk_reward_ratio":2.0,"risk_mode":"conservative",'
+        '"suggested_risk_percent":0.75,"suggested_leverage":5,'
+        '"recommended_margin_mode":"ISOLATED","tp_percent":3.0,'
+        '"sl_percent":1.0,"risk_reward_ratio":2.0,"risk_mode":"aggressive",'
         '"strategy_family":"SCALPING","reason":"detailed but concise trade thesis"}. '
         "Do not output markdown code blocks. Do not output any explanation outside the JSON block. "
         f"Snapshot Data: {payload}"
@@ -542,4 +555,10 @@ def decide_trade(snapshot):
             fallback["reason"] = f"Ollama fallback: {exc}"
             return fallback
     return _heuristic_decision(snapshot)
+
+
+
+
+
+
 

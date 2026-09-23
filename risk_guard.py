@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+﻿from datetime import datetime, timedelta
 
 
 def _safe_float(value, default=0.0):
@@ -47,7 +47,6 @@ def _is_adopted_bookkeeping(trade):
     return (
         str(trade.get("strategy_family", "")).upper() == "ADOPTED"
         or str(trade.get("ai_mode", "")).lower() == "sync-adopt"
-        or str(trade.get("close_reason", "")).upper() == "SYNC_CLOSE"
     )
 
 
@@ -108,9 +107,16 @@ def evaluate_pre_trade(symbol, balance=None, open_positions=None, stats=None, co
     daily_loss = abs(sum(min(_safe_float(trade.get("pnl"), 0.0), 0.0) for trade in recent_daily))
     hourly_loss = abs(sum(min(_safe_float(trade.get("pnl"), 0.0), 0.0) for trade in recent_hourly))
     hourly_losses = sum(1 for trade in recent_hourly if _is_loss(trade))
-    consecutive_losses = count_consecutive_losses(risk_closed)
+    consecutive_losses = count_consecutive_losses(recent_daily)
     symbol_losses_today = sum(1 for trade in symbol_daily if _is_loss(trade))
-    symbol_consecutive_losses = count_consecutive_losses(symbol_closed)
+    symbol_consecutive_losses = count_consecutive_losses(symbol_daily)
+    
+    # Max loss per jam = 25% dari PNL bersih (jika PNL bersih positif)
+    net_daily_pnl = sum(_safe_float(trade.get("pnl"), 0.0) for trade in recent_daily)
+    if net_daily_pnl > 0:
+        effective_hourly_loss_limit = max(net_daily_pnl * 0.25, 0.5)
+    else:
+        effective_hourly_loss_limit = hourly_loss_limit_usdt
     symbol_hard_stop = next(
         (
             trade for trade in reversed(symbol_closed)
@@ -120,6 +126,7 @@ def evaluate_pre_trade(symbol, balance=None, open_positions=None, stats=None, co
     )
     latest_symbol_loss = next((trade for trade in reversed(symbol_closed) if _is_loss(trade)), None)
 
+    print(f"DEBUG: Evaluate {symbol} - daily_loss={daily_loss}, hourly_loss={hourly_loss}, consecutive_losses={consecutive_losses}, symbol_losses_today={symbol_losses_today}")
     result = {
         "allowed": True,
         "reason": "Risk guard mengizinkan entry.",
@@ -186,12 +193,18 @@ def evaluate_pre_trade(symbol, balance=None, open_positions=None, stats=None, co
         })
         return result
 
-    if hourly_loss >= hourly_loss_limit_usdt:
+    if hourly_loss >= effective_hourly_loss_limit:
+        reason_msg = (
+            f"Rugi 1 jam terakhir {hourly_loss:.2f} USDT melewati batas {effective_hourly_loss_limit:.2f} USDT "
+            f"(25% PNL bersih {net_daily_pnl:.2f} USDT)."
+            if net_daily_pnl > 0 else
+            f"Rugi 1 jam terakhir {hourly_loss:.2f} USDT melewati batas {effective_hourly_loss_limit:.2f} USDT."
+        )
         result.update({
             "allowed": False,
             "policy": "cooldown",
             "risk_multiplier": 0.0,
-            "reason": f"Rugi 1 jam terakhir {hourly_loss:.2f} USDT melewati batas {hourly_loss_limit_usdt:.2f} USDT.",
+            "reason": reason_msg,
         })
         return result
 
@@ -207,6 +220,30 @@ def evaluate_pre_trade(symbol, balance=None, open_positions=None, stats=None, co
                     "reason": f"{symbol} cooldown loss aktif {symbol_loss_cooldown_minutes} menit.",
                 })
                 return result
+
+    # ---- Drawdown protection (equity-based hard stop) ----
+    balance_val = _safe_float(balance, 0.0)
+    peak_balance = _safe_float(cfg.get("peak_balance"), balance_val)
+    if peak_balance > 0 and balance_val > 0:
+        drawdown_pct = (peak_balance - balance_val) / peak_balance * 100
+        if drawdown_pct >= 20.0:
+            result.update({
+                "allowed": False,
+                "policy": "drawdown_hard_stop",
+                "risk_multiplier": 0.0,
+                "reason": f"Drawdown {drawdown_pct:.1f}% >= 20%: trading dihentikan sementara.",
+            })
+            return result
+        elif drawdown_pct >= 15.0:
+            result["risk_multiplier"] = min(result.get("risk_multiplier", 1.0), 0.25)
+            result["leverage_cap"] = 2
+            result["policy"] = "drawdown_severe"
+            result["reason"] = f"Drawdown {drawdown_pct:.1f}%: size diperkecil drastis."
+        elif drawdown_pct >= 10.0:
+            result["risk_multiplier"] = min(result.get("risk_multiplier", 1.0), 0.5)
+            result["leverage_cap"] = 3
+            if not result.get("policy") or result["policy"] == "allow":
+                result["policy"] = "drawdown_caution"
 
     if symbol_hard_stop is not None:
         hard_stop_dt = _trade_dt(symbol_hard_stop)
@@ -269,7 +306,7 @@ def evaluate_pre_trade(symbol, balance=None, open_positions=None, stats=None, co
         result.update({
             "policy": "recovery",
             "risk_multiplier": 0.35,
-            "confidence_boost": -0.08,
+            "confidence_boost": -0.02,
             "leverage_cap": 3,
             "reason": "Recovery mode aktif karena winrate recent rendah.",
         })
@@ -279,7 +316,7 @@ def evaluate_pre_trade(symbol, balance=None, open_positions=None, stats=None, co
         result.update({
             "policy": "hard_stop_recovery",
             "risk_multiplier": 0.4,
-            "confidence_boost": -0.06,
+            "confidence_boost": -0.01,
             "leverage_cap": 4,
             "reason": "Recovery hard-stop aktif karena rasio HARD_STOP recent tinggi.",
         })
@@ -289,7 +326,7 @@ def evaluate_pre_trade(symbol, balance=None, open_positions=None, stats=None, co
         result.update({
             "policy": "disabled_profit_lock",
             "risk_multiplier": 0.6,
-            "confidence_boost": -0.03,
+            "confidence_boost": 0.0,
             "leverage_cap": 5,
             "reason": "Mode kunci profit aktif karena ada winner yang bocor kembali.",
         })
@@ -299,7 +336,7 @@ def evaluate_pre_trade(symbol, balance=None, open_positions=None, stats=None, co
         result.update({
             "policy": "cautious",
             "risk_multiplier": 0.5,
-            "confidence_boost": -0.05,
+            "confidence_boost": 0.0,
             "leverage_cap": 5,
             "reason": "Risk guard mode hati-hati karena ada loss terbaru.",
         })
@@ -309,7 +346,7 @@ def evaluate_pre_trade(symbol, balance=None, open_positions=None, stats=None, co
         result.update({
             "policy": "throttle",
             "risk_multiplier": 0.75,
-            "confidence_boost": -0.03,
+            "confidence_boost": 0.0,
             "leverage_cap": 5,
             "reason": "Open position sudah padat, size diperkecil.",
         })
@@ -319,10 +356,11 @@ def evaluate_pre_trade(symbol, balance=None, open_positions=None, stats=None, co
         result.update({
             "policy": "sluggish_market",
             "risk_multiplier": 0.5,
-            "confidence_boost": -0.05,
+            "confidence_boost": 0.0,
             "leverage_cap": 3,
             "reason": "Market SLUGGISH: ukuran posisi dikurangi 50%.",
         })
         return result
 
     return result
+

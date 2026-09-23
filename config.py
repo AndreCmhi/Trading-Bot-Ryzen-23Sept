@@ -22,7 +22,7 @@ API_KEY = os.getenv("BINANCE_API_KEY", "")
 API_SECRET = os.getenv("BINANCE_API_SECRET", "")
 TESTNET = os.getenv("BINANCE_TESTNET", "true").lower() == "true"
 SYMBOLS = os.getenv("SYMBOLS", "BTCUSDT,ETHUSDT,SOLUSDT").split(",")
-MIN_SCORE = int(os.getenv("MIN_SCORE", "3"))
+MIN_SCORE = int(os.getenv("MIN_SCORE", "10"))
 
 # Trading constants
 MIN_RRR = float(os.getenv("MIN_RRR", "2.0"))

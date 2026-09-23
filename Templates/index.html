@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="csrf-token" content="{{ csrf_token }}">
   <title>RYZEN ELITE TERMINAL</title>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js">    
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.5/socket.io.min.js"></script><script>    
     // Sparkline generator
     function genSparkline(arr) {
         if(!arr||!Array.isArray(arr)||arr.length<2) return "";
@@ -421,6 +421,23 @@
         <div class="lbl">Menang / Kalah / BE</div>
         <div id="dailyWinLoss" class="val">0 / 0 / 0</div>
       </div>
+    </div>
+  </section>
+
+
+  <!-- ENTRY MANUAL -->
+  <section>
+    <div class="sec-head">
+      <h2>Entry Manual</h2>
+    </div>
+    <div class="card" style="padding:15px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <input type="text" id="manualSymbol" placeholder="Symbol (ex: BTCUSDT)" style="padding:8px;background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:4px" />
+      <select id="manualSide" style="padding:8px;background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:4px">
+        <option value="BUY">LONG (BUY)</option>
+        <option value="SELL">SHORT (SELL)</option>
+      </select>
+      <input type="number" id="manualLeverage" placeholder="Leverage" value="5" min="1" max="125" style="padding:8px;width:100px;background:var(--bg);color:var(--text);border:1px solid var(--line);border-radius:4px" />
+      <button id="btnManualEntry" class="btn btn-primary" type="button" style="padding:8px 16px">Buka Posisi</button>
     </div>
   </section>
 
@@ -1081,6 +1098,29 @@
   }
 
   // ─── INIT ─────────────────────────────────────────────────
+
+  byId("btnManualEntry").addEventListener("click", async () => {
+    const symbol = byId("manualSymbol").value.trim().toUpperCase();
+    const side = byId("manualSide").value;
+    const leverage = parseInt(byId("manualLeverage").value, 10);
+    if (!symbol) { alert("Symbol wajib diisi!"); return; }
+    if (!confirm('Buka posisi ' + side + ' untuk ' + symbol + ' dengan leverage ' + leverage + 'x?')) return;
+    const btn = byId("btnManualEntry");
+    btn.disabled = true;
+    btn.textContent = "Loading...";
+    try {
+      const data = await api("/api/open_position", { method: "POST", body: JSON.stringify({ symbol, side, leverage }) });
+      alert(data.message || "Berhasil");
+      byId("manualSymbol").value = "";
+      await reloadAll();
+    } catch (err) {
+      alert("Error: " + err.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Buka Posisi";
+    }
+  });
+
   reloadAll();
   setInterval(() => reloadAll().catch(() => {}), 10000);
     

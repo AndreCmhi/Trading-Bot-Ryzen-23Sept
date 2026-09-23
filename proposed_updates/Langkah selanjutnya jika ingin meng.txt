@@ -1,0 +1,3 @@
+ **Langkah selanjutnya jika ingin mengaktifkan:**
+  Jika Anda sudah siap menggunakan parameter baru ini, Anda cukup menyalin atau me-replace (Timpa) file `.env` dan
+  `runtime_settings.json` yang ada di dalam folder `proposed_updates` ke folder utama `Trading-Bot-Ryzen`.

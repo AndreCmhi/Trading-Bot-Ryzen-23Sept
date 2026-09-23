@@ -3,12 +3,14 @@ __pycache__/
 *.pyo
 *.pyd
 .env
-.env.example
 *.log
 *.exe
 *.pid
 trades.json
 ai_decisions.json
 runtime_settings.json
-*.txt
+testnet_shadow_positions.json
+manual_roi.json
+manual_tp_sl.json
+*.tmp
 error_output.txt

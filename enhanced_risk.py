@@ -159,3 +159,24 @@ def calculate_atr_position_size(balance, risk_pct, price, atr, risk_reward=2.5):
         "sl_price": round(price - sl_distance, 2), # Contoh untuk Long
         "tp_price": round(price + (sl_distance * risk_reward), 2)
     }
+
+BINANCE_FUTURES_TAKER_FEE = 0.0004  # 0.04% per side = 0.08% round trip
+
+
+def minimum_rrr_after_fees(tp_percent, sl_percent, leverage=5):
+    """Calculate effective RRR after accounting for round-trip trading fees.
+    Entry and exit both use taker fee. With leverage, fee impact on margin is multiplied.
+    """
+    fee_pct_on_margin = BINANCE_FUTURES_TAKER_FEE * 2 * leverage * 100
+    effective_tp = max(tp_percent - fee_pct_on_margin, 0.0)
+    effective_sl = sl_percent + fee_pct_on_margin
+    if effective_sl <= 0:
+        return 0.0
+    return round(effective_tp / effective_sl, 4)
+
+
+def is_trade_worth_after_fees(tp_percent, sl_percent, leverage=5, min_rrr=2.0):
+    """Return True only if trade is profitable after fees with required RRR."""
+    rrr = minimum_rrr_after_fees(tp_percent, sl_percent, leverage)
+    return rrr >= min_rrr
+

@@ -1,4 +1,4 @@
-﻿from datetime import datetime
+from datetime import datetime
 from functools import wraps
 import hmac
 import json
@@ -9,16 +9,6 @@ import socket
 import threading
 import time
 import requests
-import requests
-def send_telegram_msg(msg):
-    token = os.getenv('TELEGRAM_BOT_TOKEN')
-    chat_id = os.getenv('TELEGRAM_CHAT_ID')
-    if token and chat_id:
-        url = f'https://api.telegram.org/bot{token}/sendMessage'
-        try:
-            requests.post(url, data={'chat_id': chat_id, 'text': msg})
-        except:
-            pass
 
 def send_telegram_msg(msg):
     token = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -29,6 +19,7 @@ def send_telegram_msg(msg):
             requests.post(url, data={"chat_id": chat_id, "text": msg})
         except:
             pass
+
 from pathlib import Path
 import logging
 from logging.handlers import RotatingFileHandler
@@ -88,7 +79,8 @@ from ai_decision import (
 from advanced_indicators import calculate_adx, calculate_vwap
 import config
 from risk_guard import count_consecutive_losses, evaluate_pre_trade
-from enhanced_risk import calculate_kelly_criterion, calculate_daily_loss_limit, calculate_drawdown_protection, check_funding_rate_risk, calculate_consecutive_loss_protection
+from enhanced_risk import calculate_kelly_criterion, calculate_daily_loss_limit, calculate_drawdown_protection, check_funding_rate_risk, calculate_consecutive_loss_protection, is_exposure_safe
+from upgrade_antigravity.ag_pipeline import antigravity_gate
 
 BASE_DIR = Path(__file__).resolve().parent
 TEMPLATE_DIR = BASE_DIR / "Templates"
@@ -131,7 +123,10 @@ RELAXED_SETUP_MODE = os.getenv("RELAXED_SETUP_MODE", "false").lower() == "true"
 UNRESTRICTED_SCAN_UNIVERSE = True
 DISABLE_TREND_FILTER = os.getenv("DISABLE_TREND_FILTER", "false").lower() == "true"
 DISABLE_PULLBACK_FILTER = os.getenv("DISABLE_PULLBACK_FILTER", "false").lower() == "true"
-MAX_OPEN_POSITIONS = int(os.getenv("MAX_OPEN_POSITIONS", "30"))
+MAX_OPEN_POSITIONS = int(os.getenv("MAX_OPEN_POSITIONS", "5"))
+GASING_MODE_ENABLED = os.getenv("GASING_MODE_ENABLED", "true").lower() == "true"
+GASING_MIN_SCORE = int(os.getenv("GASING_MIN_SCORE", "4"))
+GASING_SCORE_BONUS = int(os.getenv("GASING_SCORE_BONUS", "2"))
 MAX_DAILY_LOSS_USDT = float(os.getenv("MAX_DAILY_LOSS_USDT", "100"))
 MAX_CONSECUTIVE_LOSSES = int(os.getenv("MAX_CONSECUTIVE_LOSSES", "5"))
 MAX_TRADES_PER_HOUR = int(os.getenv("MAX_TRADES_PER_HOUR", "15"))
@@ -152,6 +147,9 @@ TOP_SYMBOL_LIMIT = int(os.getenv("TOP_SYMBOL_LIMIT", "20"))
 SCAN_CANDIDATE_POOL_LIMIT = int(os.getenv("SCAN_CANDIDATE_POOL_LIMIT", "120"))
 SYMBOL_RANK_REFRESH_SECONDS = int(os.getenv("SYMBOL_RANK_REFRESH_SECONDS", "900"))
 MAX_ALLOWED_FUNDING_RATE = float(os.getenv("MAX_ALLOWED_FUNDING_RATE", "0.0008"))
+MAX_MARK_PRICE_DIVERGENCE_PERCENT = float(os.getenv("MAX_MARK_PRICE_DIVERGENCE_PERCENT", "0.15"))
+MAX_TOTAL_EXPOSURE_RATIO = float(os.getenv("MAX_TOTAL_EXPOSURE_RATIO", "1.8"))
+MIN_LIQUIDATION_BUFFER_PERCENT = float(os.getenv("MIN_LIQUIDATION_BUFFER_PERCENT", "8.0"))
 PULLBACK_DISTANCE_PERCENT = float(os.getenv("PULLBACK_DISTANCE_PERCENT", "0.35"))
 ENTRY_BREAKOUT_BUFFER_PERCENT = float(os.getenv("ENTRY_BREAKOUT_BUFFER_PERCENT", "0.03"))
 MIN_EMA_SLOPE_5M = float(os.getenv("MIN_EMA_SLOPE_5M", "0.015"))
@@ -168,7 +166,7 @@ MANUAL_BLOCKED_SYMBOLS = {
     symbol.strip().upper()
     for symbol in os.getenv(
         "BLOCKED_SYMBOLS",
-        "BASUSDT,RABUSDT,LRCUSDT,LABUSDT,PORT3USDT,FISUSDT,FXSUSDT,PLAYUSDT,BCHUSDT,TOKENUSDT,ÃƒÂ¥Ã‚Â¸Ã‚ÂÃƒÂ¥Ã‚Â®Ã¢â‚¬Â°ÃƒÂ¤Ã‚ÂºÃ‚ÂºÃƒÂ§Ã¢â‚¬ÂÃ…Â¸USDT,PONKEUSDT,TRBUSDT,SKYAIUSDT,SIRENUSDT,QUICKUSDT",
+        "BASUSDT,RABUSDT,LRCUSDT,LABUSDT,PORT3USDT,FISUSDT,FXSUSDT,PLAYUSDT,BCHUSDT,TOKENUSDT,Ã¥Â¸ÂÃ¥Â®â€°Ã¤ÂºÂºÃ§â€Å¸USDT,PONKEUSDT,TRBUSDT,SKYAIUSDT,SIRENUSDT,QUICKUSDT",
     ).split(",")
     if symbol.strip()
 }
@@ -722,10 +720,6 @@ def load_exchange_filters():
 
 def build_ranked_scan_symbols(discovered_symbols):
     blocked_symbols = get_blocked_symbols()
-    if UNRESTRICTED_SCAN_UNIVERSE:
-        pool_limit = max(TOP_SYMBOL_LIMIT, SCAN_CANDIDATE_POOL_LIMIT)
-        return [symbol for symbol in discovered_symbols if symbol not in blocked_symbols][:pool_limit]
-
     if SYMBOL_SCAN_MODE != "ALL":
         configured = getattr(config, "SYMBOLS", []) or []
         return [symbol for symbol in configured if symbol in symbol_filters and symbol not in blocked_symbols]
@@ -748,6 +742,8 @@ def build_ranked_scan_symbols(discovered_symbols):
 
     ranked = []
     for symbol in discovered_symbols:
+        if symbol in blocked_symbols:
+            continue
         ticker = ticker_map.get(symbol)
         if not ticker:
             continue
@@ -755,6 +751,7 @@ def build_ranked_scan_symbols(discovered_symbols):
         try:
             last_price = float(ticker.get("lastPrice", 0) or 0)
             quote_volume = float(ticker.get("quoteVolume", 0) or 0)
+            transaction_count = int(float(ticker.get("count", 0) or 0))
         except (TypeError, ValueError):
             continue
 
@@ -776,23 +773,25 @@ def build_ranked_scan_symbols(discovered_symbols):
             {
                 "symbol": symbol,
                 "quote_volume": quote_volume,
+                "transaction_count": transaction_count,
                 "open_interest_notional": open_interest_notional,
                 "atr_percent_5m": atr_percent_5m,
             }
         )
 
+    pool_limit = max(TOP_SYMBOL_LIMIT, SCAN_CANDIDATE_POOL_LIMIT)
     if sluggish_market:
         ranked.sort(
-            key=lambda item: (item["atr_percent_5m"], item["open_interest_notional"], item["quote_volume"]),
+            key=lambda item: (item["transaction_count"], item["atr_percent_5m"], item["quote_volume"], item["open_interest_notional"]),
             reverse=True,
         )
     else:
         ranked.sort(
-            key=lambda item: (item["open_interest_notional"], item["quote_volume"]),
+            key=lambda item: (item["transaction_count"], item["quote_volume"], item["open_interest_notional"]),
             reverse=True,
         )
-    selected = [item["symbol"] for item in ranked[:TOP_SYMBOL_LIMIT] if item["symbol"] not in blocked_symbols]
-    fallback = [symbol for symbol in discovered_symbols if symbol not in blocked_symbols][:TOP_SYMBOL_LIMIT]
+    selected = [item["symbol"] for item in ranked[:pool_limit]]
+    fallback = [symbol for symbol in discovered_symbols if symbol not in blocked_symbols][:pool_limit]
     return selected or fallback
 
 
@@ -867,6 +866,8 @@ def get_default_settings():
         "default_leverage": DEFAULT_LEVERAGE,
         "min_score": int(getattr(config, "MIN_SCORE", 3) or 3),
         "max_open_positions": MAX_OPEN_POSITIONS,
+        "gasing_mode_enabled": GASING_MODE_ENABLED,
+        "gasing_min_score": GASING_MIN_SCORE,
         "max_daily_loss_usdt": MAX_DAILY_LOSS_USDT,
         "hard_daily_loss_multiplier": 2.5,
         "max_consecutive_losses": MAX_CONSECUTIVE_LOSSES,
@@ -1387,6 +1388,11 @@ def sync_closed_trades():
 
     try:
         current_positions = get_current_positions()
+        # Jika respon kosong tapi ada posisi terbuka, coba sekali lagi untuk hindari false positive desync
+        open_records = [t for t in trades if t.get("status") == "OPEN"]
+        if not current_positions and open_records:
+            time.sleep(0.5)
+            current_positions = get_current_positions()
     except Exception as exc:
         print("Error getting current positions for sync_closed_trades:", exc)
         return trades
@@ -1412,6 +1418,9 @@ def sync_closed_trades():
                 open_time = t.get("time")
                 break
         realized_pnl, closed_time = get_realized_pnl_for_trade(symbol, open_time)
+        close_reason = None
+        close_price = 0.0
+
         if realized_pnl == 0.0 and closed_time is None:
             retry_pnl, retry_time = get_realized_pnl_for_trade(symbol, open_time)
             if retry_pnl != 0.0 or retry_time is not None:
@@ -1437,13 +1446,15 @@ def sync_closed_trades():
                                     else:
                                         realized_pnl = round((entry - exit_price) * qty, 4)
                                     closed_time = datetime.fromtimestamp(last_exit.get('updateTime', 0)/1000).strftime('%Y-%m-%d %H:%M:%S')
-                                    t_rec['close_reason'] = 'EXCHANGE_TP' if last_exit.get('type') == 'TAKE_PROFIT_MARKET' else ('EXCHANGE_SL' if last_exit.get('type') == 'STOP_MARKET' else 'EXCHANGE_CLOSE')
-                                    t_rec['close_price'] = exit_price
+                                    close_reason = 'EXCHANGE_TP' if last_exit.get('type') == 'TAKE_PROFIT_MARKET' else ('EXCHANGE_SL' if last_exit.get('type') == 'STOP_MARKET' else 'EXCHANGE_CLOSE')
+                                    close_price = exit_price
                     except Exception as e:
                         print('Error estimating testnet pnl:', e)
         sync_results[symbol] = {
             "pnl": realized_pnl,
-            "closed_time": closed_time
+            "closed_time": closed_time,
+            "close_reason": close_reason,
+            "close_price": close_price,
         }
 
     with trades_lock:
@@ -1456,9 +1467,9 @@ def sync_closed_trades():
                     res = sync_results[sym]
                     trade["pnl"] = res["pnl"]
                     trade["status"] = "CLOSED"
-                    trade["close_reason"] = trade.get("close_reason") or "SYNC_CLOSE"
+                    trade["close_reason"] = trade.get("close_reason") or res.get("close_reason") or "SYNC_CLOSE"
                     trade["closed_time"] = res["closed_time"]
-                    trade["close_price"] = round(float(trade.get("close_price", 0) or 0), 4)
+                    trade["close_price"] = round(float(res.get("close_price") or trade.get("close_price", 0) or 0), 4)
                     msg = f"Trade Closed: {sym} | PnL: {res['pnl']:.2f} | Reason: {trade.get('close_reason', '-')}"
                     send_telegram_msg(msg)
                     updated = True
@@ -1468,38 +1479,6 @@ def sync_closed_trades():
             return fresh_trades
     return load_trades()
 
-    live_symbols = {position.get("symbol") for position in get_current_positions()}
-    updated = False
-
-    for trade in trades:
-        if trade.get("status") != "OPEN":
-            continue
-
-        symbol = trade.get("symbol")
-        if symbol in live_symbols:
-            continue
-
-        realized_pnl, closed_time = get_realized_pnl_for_trade(symbol, trade.get("time"))
-        trade["pnl"] = realized_pnl
-        trade["status"] = "CLOSED"
-        msg = f"Trade Closed: {symbol} | PnL: {realized_pnl:.2f} | Reason: {trade.get("close_reason", "-")}"
-        send_telegram_msg(msg)
-        trade["close_reason"] = trade.get("close_reason") or "SYNC_CLOSE"
-        trade["closed_time"] = closed_time
-        trade["close_price"] = round(float(trade.get("close_price", 0) or 0), 4)
-        # If PnL came back 0 but it was a real close, retry with wider time window
-        if realized_pnl == 0.0 and closed_time is None:
-            retry_pnl, retry_time = get_realized_pnl_for_trade(symbol, trade.get("time"))
-            if retry_pnl != 0.0 or retry_time is not None:
-                trade["pnl"] = retry_pnl
-                trade["closed_time"] = retry_time
-        updated = True
-
-    if updated:
-        trades.sort(key=get_trade_reference_datetime)
-        save_trades(trades)
-
-    return trades
 
 
 def get_open_position_count(trackable_only=True):
@@ -2519,10 +2498,15 @@ def get_market_confirmation_snapshot(closes, volumes, highs=None, lows=None):
     vwap = calculate_vwap(closes, volumes) if volumes else 0.0
     adx = calculate_adx(highs, lows, closes, 14) if highs and lows else calculate_adx(closes, period=14)
     nonzero_volumes = [volume for volume in volumes if volume > 0]
-    if len(nonzero_volumes) >= 2:
-        latest_volume = nonzero_volumes[-1]
-        baseline_volumes = nonzero_volumes[-21:-1] if len(nonzero_volumes) > 21 else nonzero_volumes[:-1]
+    # Fix: gunakan candle ke-2 dari terakhir (sudah close) bukan candle aktif (belum close)
+    # Candle 1m terakhir masih berjalan -> volume kecil -> ratio mendekati 0 -> blok semua entry
+    if len(nonzero_volumes) >= 3:
+        latest_volume = nonzero_volumes[-2]  # candle terakhir yang SUDAH close
+        baseline_volumes = nonzero_volumes[-22:-2] if len(nonzero_volumes) > 22 else nonzero_volumes[:-2]
         avg_volume = sum(baseline_volumes) / len(baseline_volumes) if baseline_volumes else 0.0
+    elif len(nonzero_volumes) >= 2:
+        latest_volume = nonzero_volumes[-2]
+        avg_volume = nonzero_volumes[-2]  # hanya 1 candle baseline, ratio = 1.0
     else:
         latest_volume = 0.0
         avg_volume = 0.0
@@ -2572,6 +2556,73 @@ def get_latest_funding_rate(symbol):
     except Exception as exc:
         print(f"Funding rate error {symbol}: {exc}")
         return None
+
+
+def get_mark_price_divergence_percent(symbol, last_price):
+    try:
+        mark_data = client.futures_mark_price(symbol=symbol)
+        mark_price = float(mark_data.get("markPrice", 0) or 0)
+        last_price = float(last_price or 0)
+        if mark_price <= 0 or last_price <= 0:
+            return None, mark_price
+        divergence = abs(mark_price - last_price) / last_price * 100.0
+        return divergence, mark_price
+    except Exception as exc:
+        print(f"Mark price divergence error {symbol}: {exc}")
+        return None, 0.0
+
+
+def get_min_liquidation_buffer_percent(symbol, side, entry_price):
+    try:
+        position_risks = client.futures_position_information(symbol=symbol)
+        entry_price = float(entry_price or 0)
+        if entry_price <= 0:
+            return None
+        target_side = str(side or "").upper()
+        buffers = []
+        for position in position_risks:
+            liquidation_price = float(position.get("liquidationPrice", 0) or 0)
+            if liquidation_price <= 0:
+                continue
+            position_side = str(position.get("positionSide", "BOTH") or "BOTH").upper()
+            if position_side not in {"BOTH", target_side}:
+                continue
+            buffer_pct = abs(entry_price - liquidation_price) / entry_price * 100.0
+            buffers.append(buffer_pct)
+        return min(buffers) if buffers else None
+    except Exception as exc:
+        print(f"Liquidation buffer check error {symbol}: {exc}")
+        return None
+
+
+def evaluate_gasing_layers(side, rsi, trend_5m, trend_15m, trend_1h, price, vwap, ema20, ema50, volume_ratio, adx):
+    target_trend = "bullish" if side == "BUY" else "bearish"
+    price_on_right_side = (
+        price >= vwap and price >= ema20 and price >= ema50
+        if side == "BUY"
+        else price <= vwap and price <= ema20 and price <= ema50
+    )
+    rsi_simple_ok = 45 <= rsi <= 68 if side == "BUY" else 32 <= rsi <= 55
+    layers = [
+        (trend_1h == target_trend, "arah besar"),
+        (trend_15m in {target_trend, "mixed"}, "arah menengah"),
+        (trend_5m == target_trend, "arah eksekusi"),
+        (price_on_right_side, "harga sisi benar"),
+        (rsi_simple_ok, "RSI sehat"),
+        (volume_ratio >= 0.8, "volume hidup"),
+        (adx >= 14, "trend cukup"),
+    ]
+    passed = [label for ok, label in layers if ok]
+    failed = [label for ok, label in layers if not ok]
+    score = len(passed)
+    return {
+        "enabled": GASING_MODE_ENABLED,
+        "allowed": (not GASING_MODE_ENABLED) or score >= GASING_MIN_SCORE,
+        "score": score,
+        "passed": passed,
+        "failed": failed,
+        "reason": f"GASING {score}/7: ok {', '.join(passed) or '-'}; kurang {', '.join(failed) or '-'}.",
+    }
 
 
 def supports_pullback(closes, side):
@@ -2648,15 +2699,30 @@ def evaluate_strategy_setup(symbol):
     price_above_ema20 = bool(confirmation["price_above_ema20"])
     price_above_ema50 = bool(confirmation["price_above_ema50"])
 
+    mark_divergence_pct, mark_price = get_mark_price_divergence_percent(symbol, price)
+    if (
+        not TEST_MINIMUM_TRADING_MODE
+        and mark_divergence_pct is not None
+        and mark_divergence_pct > MAX_MARK_PRICE_DIVERGENCE_PERCENT
+    ):
+        return {
+            "allowed": False,
+            "reason": (
+                f"Mark/last divergence {mark_divergence_pct:.3f}% di atas batas "
+                f"{MAX_MARK_PRICE_DIVERGENCE_PERCENT:.3f}%; risiko price-protection/slippage tinggi."
+            ),
+        }
+
     min_adx = float(settings.get("min_adx", 0.8))
-    min_volume_ratio = float(settings.get("min_volume_ratio", 0.6))
+    min_volume_ratio = float(settings.get("min_volume_ratio", 0.8))
     if not TEST_MINIMUM_TRADING_MODE and adx < min_adx:
         return {
             "allowed": False,
             "reason": f"ADX {adx:.2f} di bawah minimum {min_adx:.2f}; trend terlalu lemah untuk scalping.",
         }
 
-    if not TEST_MINIMUM_TRADING_MODE and volume_ratio < min_volume_ratio:
+    effective_min_vol = 0.0 if config.TESTNET else min_volume_ratio
+    if not TEST_MINIMUM_TRADING_MODE and volume_ratio < effective_min_vol:
         return {
             "allowed": False,
             "reason": f"Volume ratio x{volume_ratio:.2f} di bawah minimum x{min_volume_ratio:.2f}; likuiditas/momentum terlalu lemah.",
@@ -2672,6 +2738,26 @@ def evaluate_strategy_setup(symbol):
     side = fallback_side if disable_trend_filter else ("BUY" if trend_1h == "bullish" else "SELL")
     if not disable_trend_filter and trend_15m != "mixed":
         side = "BUY" if trend_15m == "bullish" else "SELL"
+
+    gasing = evaluate_gasing_layers(
+        side,
+        rsi,
+        trend_5m,
+        trend_15m,
+        trend_1h,
+        price,
+        vwap,
+        ema20,
+        ema50,
+        volume_ratio,
+        adx,
+    )
+    if not gasing["allowed"]:
+        return {
+            "allowed": False,
+            "reason": gasing["reason"],
+            "gasing": gasing,
+        }
 
     atr_limit = MAX_ALLOWED_ATR_PERCENT * (1.5 if RELAXED_SETUP_MODE else 1.0)
     if not TEST_MINIMUM_TRADING_MODE and atr_percent > atr_limit:
@@ -2763,6 +2849,8 @@ def evaluate_strategy_setup(symbol):
     score += 2 if pullback_ok else 0
     score += 2 if trigger_ok else 0
     score += confirmation_score
+    if GASING_MODE_ENABLED:
+        score += max(0, gasing["score"] - GASING_MIN_SCORE) + GASING_SCORE_BONUS
     if side == "BUY" and float(profile["buy_rsi_min"]) <= rsi <= float(profile["buy_rsi_max"]):
         score += 2
     elif side == "SELL" and float(profile["sell_rsi_min"]) <= rsi <= float(profile["sell_rsi_max"]):
@@ -2781,6 +2869,8 @@ def evaluate_strategy_setup(symbol):
         "rsi": rsi,
         "atr_percent": atr_percent,
         "funding_rate": funding_rate,
+        "mark_price": mark_price,
+        "mark_divergence_pct": mark_divergence_pct,
         "closes_1m": closes_1m,
         "volumes_1m": volumes_1m,
         "trend_5m": trend_5m,
@@ -2795,8 +2885,9 @@ def evaluate_strategy_setup(symbol):
         "price_above_ema20": price_above_ema20,
         "price_above_ema50": price_above_ema50,
         "confirmation_score": confirmation_score,
+        "gasing": gasing,
         "reason": (
-            f"Bias {side} | trend filter {'off' if disable_trend_filter else 'on'} | "
+            f"Bias {side} | {gasing['reason']} | trend filter {'off' if disable_trend_filter else 'on'} | "
             f"pullback {'off' if disable_pullback_filter else ('ok' if pullback_ok else 'longgar')} | "
             f"trigger {'ok' if trigger_ok else 'longgar'} | "
             f"VWAP {'ok' if (side == 'BUY' and price_above_vwap) or (side == 'SELL' and not price_above_vwap) else 'no'} | "
@@ -3325,10 +3416,32 @@ def build_order_plan(symbol, balance, price, leverage, ai_decision=None, setting
         float(settings.get("active_margin_balance_percent", DEFAULT_ACTIVE_MARGIN_BALANCE_PERCENT) or 0.0),
         0.0,
     )
-    max_open_positions = max(int(settings.get("max_open_positions", MAX_OPEN_POSITIONS) or MAX_OPEN_POSITIONS), 1)
     active_margin_limit = max(balance, 0) * (active_margin_balance_percent / 100.0)
-    balance_based_trade_margin = active_margin_limit / max_open_positions if active_margin_limit > 0 else 0.0
+    max_open_positions = max(int(settings.get("max_open_positions", MAX_OPEN_POSITIONS) or MAX_OPEN_POSITIONS), 1)
+    used_margin = 0.0
+    try:
+        for position in get_current_positions():
+            used_margin += max(float(position.get("margin", 0) or 0), 0.0)
+    except Exception as exc:
+        print(f"Active margin usage check failed: {exc}")
+
+    available_active_margin = max(active_margin_limit - used_margin, 0.0)
+    equal_slot_margin = active_margin_limit / max_open_positions if active_margin_limit > 0 else 0.0
+    balance_based_trade_margin = min(equal_slot_margin, available_active_margin) if available_active_margin > 0 else 0.0
+    setup_score = int(ai_decision.get("setup_score", ai_decision.get("score", 0)) or 0)
+    confirmation_score = int(ai_decision.get("confirmation_score", 0) or 0)
+    quality_score = max(setup_score, confirmation_score)
+    if quality_score >= 9:
+        quality_multiplier = 1.25
+    elif quality_score >= 8:
+        quality_multiplier = 1.0
+    elif quality_score >= 7:
+        quality_multiplier = 0.75
+    else:
+        quality_multiplier = 0.5
+
     fixed_trade_notional_margin = balance_based_trade_margin if balance_based_trade_margin > 0 else configured_trade_margin
+    fixed_trade_notional_margin *= quality_multiplier
     fixed_trade_notional_margin = max(round(fixed_trade_notional_margin, 4), 0.0)
     min_trade_notional_margin = float(settings.get("min_trade_notional_usdt", 5.0))
     fixed_trade_notional_margin = max(fixed_trade_notional_margin, min_trade_notional_margin)
@@ -3420,6 +3533,22 @@ def build_order_plan(symbol, balance, price, leverage, ai_decision=None, setting
             "reason": "Qty akhir setelah pembulatan tidak lolos batas minimum exchange.",
         }
 
+    try:
+        exposure_check = is_exposure_safe(
+            call_binance("futures_position_information"),
+            final_notional,
+            balance,
+            max_exposure_ratio=MAX_TOTAL_EXPOSURE_RATIO,
+        )
+        if not exposure_check.get("allowed", False):
+            return {
+                "valid": False,
+                "qty": 0,
+                "reason": f"Exposure cap: {exposure_check.get('reason')}",
+            }
+    except Exception as exc:
+        print(f"Exposure cap check failed {symbol}: {exc}")
+
     risk_amount = final_notional * (sl_percent / 100)
     effective_risk_percent = (risk_amount / balance * 100) if balance > 0 else 0.0
 
@@ -3435,7 +3564,13 @@ def build_order_plan(symbol, balance, price, leverage, ai_decision=None, setting
         "margin_required": round(final_notional / leverage, 4) if leverage > 0 else 0.0,
         "active_margin_balance_percent": round(active_margin_balance_percent, 4),
         "active_margin_limit": round(active_margin_limit, 4),
-        "reason": "Position sizing 25% margin balance aktif dibagi jumlah posisi maksimal.",
+        "used_active_margin": round(used_margin, 4),
+        "available_active_margin": round(available_active_margin, 4),
+        "max_open_positions": max_open_positions,
+        "equal_slot_margin": round(equal_slot_margin, 4),
+        "quality_multiplier": round(quality_multiplier, 4),
+        "quality_score": quality_score,
+        "reason": "Position sizing membagi rata margin aktif ke slot posisi terbaik.",
     }
 
 
@@ -3930,6 +4065,7 @@ def execute_trade(symbol):
             performance_context=performance_context,
         )
         ai_decision.update({
+            "setup_score": score,
             "volume_ratio": round(float(setup.get("volume_ratio", 0) or 0), 4),
             "vwap": round(float(setup.get("vwap", 0) or 0), 8),
             "ema20": round(float(setup.get("ema20", 0) or 0), 8),
@@ -3971,9 +4107,45 @@ def execute_trade(symbol):
             print(f"AI SIDE MISMATCH {symbol}: setup {side}, ai {ai_decision['action']}")
             return
 
+        # ANTIGRAVITY PIPELINE GATE (ADX, Volume, RSI Zone, RRR Fee Guard, Adaptive Limits)
+        ag_snapshot = {
+            "symbol": symbol,
+            "action": side,
+            "adx": float(setup.get("adx", 0) or 0),
+            "rsi": float(setup.get("rsi", 50) or 50),
+            "tp_percent": float(ai_decision.get("tp_percent", 2.0) or 2.0),
+            "sl_percent": float(ai_decision.get("sl_percent", 1.0) or 1.0),
+            "suggested_leverage": int(ai_decision.get("suggested_leverage", trade_leverage) or trade_leverage),
+        }
+        consec_losses_count = int(overall_recent_bucket.get("consecutive_losses", 0) or stats.get("consecutive_losses", 0) or 0)
+        ag_gate_result = antigravity_gate(
+            snapshot=ag_snapshot,
+            decision=ai_decision,
+            equity=balance,
+            closed_trades=[t for t in trades if t.get("status") == "CLOSED"],
+            open_count=current_open_positions,
+            consecutive_losses=consec_losses_count,
+            symbol=symbol,
+            volumes=setup.get("volumes_1m"),
+            min_volume_ratio=0.0 if config.TESTNET else 0.8,
+        )
+        if not ag_gate_result.get("allowed", True):
+            print(f"ANTIGRAVITY GATE BLOCK {symbol}: {ag_gate_result.get('reason')} (gate: {ag_gate_result.get('block_gate')})")
+            return
+
+        ag_risk_multiplier = float(ag_gate_result.get("risk_multiplier", 1.0) or 1.0)
+        if ag_risk_multiplier < 1.0:
+            current_risk = float(ai_decision.get("suggested_risk_percent", 0.2) or 0.2)
+            ai_decision["suggested_risk_percent"] = round(max(current_risk * ag_risk_multiplier, 0.2), 4)
+
+        ag_leverage_cap = ag_gate_result.get("leverage_cap")
+        if ag_leverage_cap is not None:
+            guard_leverage_cap = min(int(guard_leverage_cap), int(ag_leverage_cap)) if guard_leverage_cap is not None else int(ag_leverage_cap)
+
         effective_leverage = max(1, min(trade_leverage, int(ai_decision.get("suggested_leverage", trade_leverage) or trade_leverage), 5))
         if guard_leverage_cap is not None:
             effective_leverage = min(effective_leverage, int(guard_leverage_cap))
+
 
         order_plan = build_order_plan(symbol, balance, float(closes[-1]), effective_leverage, ai_decision=ai_decision, settings=settings)
         if not order_plan.get("valid"):
@@ -4029,6 +4201,14 @@ def execute_trade(symbol):
             except Exception:
                 pass
             return
+        liquidation_buffer_pct = get_min_liquidation_buffer_percent(symbol, side, entry)
+        if liquidation_buffer_pct is not None and liquidation_buffer_pct < MIN_LIQUIDATION_BUFFER_PERCENT:
+            close_position(symbol, reason="LOW_LIQUIDATION_BUFFER")
+            print(
+                f"LOW LIQUIDATION BUFFER {symbol}: {liquidation_buffer_pct:.2f}% < "
+                f"{MIN_LIQUIDATION_BUFFER_PERCENT:.2f}%, position closed."
+            )
+            return
         risk_mode = ai_decision.get("risk_mode", "normal")
         tp_price, sl_price = get_tp_sl_prices(symbol, side, entry, atr_percent=setup.get("atr_percent"), risk_mode=risk_mode, tp_percent=order_plan["tp_percent"], sl_percent=order_plan["sl_percent"])
 
@@ -4048,6 +4228,9 @@ def execute_trade(symbol):
             "price_above_ema20": bool(setup.get("price_above_ema20", False)),
             "price_above_ema50": bool(setup.get("price_above_ema50", False)),
             "confirmation_score": int(setup.get("confirmation_score", 0) or 0),
+            "mark_price": round(float(setup.get("mark_price", 0) or 0), 8),
+            "mark_divergence_pct": round(float(setup.get("mark_divergence_pct", 0) or 0), 4),
+            "liquidation_buffer_pct": round(float(liquidation_buffer_pct or 0), 4),
             "ai_confidence": ai_decision["confidence"] if AI_ENABLED else None,
             "ai_reason": ai_decision["reason"] if AI_ENABLED else "AI disabled",
             "ai_mode": ai_decision["mode"] if AI_ENABLED else "disabled",
@@ -4317,6 +4500,15 @@ def auto_close():
                 partial_done = bool(trade.get("partial_tp_done"))
                 breakeven_armed = bool(trade.get("breakeven_armed"))
                 trailing_armed = bool(trade.get("trailing_armed"))
+
+                momentum_fail_threshold = max(hard_stop_threshold * 0.55, -1.4)
+                if peak_roi < 0.45 and pct <= momentum_fail_threshold:
+                    success, message = close_position(symbol, reason="MOMENTUM_FAIL")
+                    if success:
+                        print(f"MOMENTUM FAIL EXIT {symbol} {pct:.2f}% peak {peak_roi:.2f}%")
+                    else:
+                        print(f"MOMENTUM FAIL EXIT FAILED {symbol}: {message}")
+                    continue
 
                 newly_breakeven_armed = (breakeven_armed or pct >= breakeven_trigger) and not breakeven_armed
                 update_open_trade_record(
@@ -5038,21 +5230,6 @@ if __name__ == "__main__":
         debug=False,
         allow_unsafe_werkzeug=True,
     )
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
